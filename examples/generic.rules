@@ -1,0 +1,6 @@
+[C001] TASK=COUNT | SUBJECT=part_a | PROPERTY=count | OP=EQ
+[C002] TASK=LENGTH | SUBJECT=part_a | PROPERTY=length | OP=RANGE
+[C003] TASK=AREA | SUBJECT=part_a | PROPERTY=area | OP=RANGE
+[C004] TASK=SPATIAL_COMBINATION | SUBJECT=part_a | PROPERTY=spatial.position | OBJECT=part_b | OP=EQ
+[C005] TASK=ATTRIBUTE_ERROR | SUBJECT=part_a | PROPERTY=attribute.color | OP=EQ
+[C006] TASK=ATTRIBUTE_COMBINATION | SUBJECT_1=part_a | PROPERTY_1=attribute.color | SUBJECT_2=part_b | PROPERTY_2=attribute.material | OP=EQ

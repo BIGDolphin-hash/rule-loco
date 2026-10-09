@@ -1,0 +1,370 @@
+{
+  "schema": "pro-innovation.visa-patch-selection.v1",
+  "dataset_root": "/home/lxq/Data/VisA",
+  "split_manifest": "/home/lxq/Data/VisA/split_csv/1cls.csv",
+  "checkpoint": "/home/lxq/weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth",
+  "memory_images_per_class": 4,
+  "calibration_images_per_class": 16,
+  "classes": {
+    "candle": {
+      "train_normal_count": 900,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0121.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0367.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0613.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0874.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0217.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0275.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0338.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0398.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0460.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0526.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0585.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0649.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0715.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0780.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0843.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0905.JPG",
+        "/home/lxq/Data/VisA/candle/Data/Images/Normal/0968.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/candle/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/candle.dino_b6b12b18b24.npz"
+    },
+    "capsules": {
+      "train_normal_count": 542,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/075.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/226.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/374.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/528.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/019.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/057.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/093.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/128.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/164.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/205.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/245.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/280.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/319.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/356.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/393.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/432.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/467.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/506.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/546.JPG",
+        "/home/lxq/Data/VisA/capsules/Data/Images/Normal/584.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/capsules/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/capsules.dino_b6b12b18b24.npz"
+    },
+    "cashew": {
+      "train_normal_count": 450,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/061.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/184.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/306.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/436.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/016.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/045.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/075.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/109.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/138.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/169.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/199.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/229.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/259.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/291.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/322.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/355.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/387.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/421.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/452.JPG",
+        "/home/lxq/Data/VisA/cashew/Data/Images/Normal/485.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/cashew/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/cashew.dino_b6b12b18b24.npz"
+    },
+    "chewinggum": {
+      "train_normal_count": 453,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/060.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/184.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/308.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/438.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/017.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/045.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/075.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/109.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/138.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/169.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/199.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/229.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/261.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/292.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/323.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/356.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/388.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/422.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/453.JPG",
+        "/home/lxq/Data/VisA/chewinggum/Data/Images/Normal/485.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/chewinggum/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/chewinggum.dino_b6b12b18b24.npz"
+    },
+    "fryum": {
+      "train_normal_count": 450,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/061.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/184.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/306.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/436.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/016.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/045.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/075.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/109.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/138.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/169.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/199.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/229.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/259.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/291.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/322.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/355.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/387.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/421.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/452.JPG",
+        "/home/lxq/Data/VisA/fryum/Data/Images/Normal/485.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/fryum/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/fryum.dino_b6b12b18b24.npz"
+    },
+    "macaroni1": {
+      "train_normal_count": 900,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0121.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0367.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0613.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0874.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0217.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0275.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0338.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0398.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0460.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0526.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0585.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0649.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0715.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0780.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0843.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0905.JPG",
+        "/home/lxq/Data/VisA/macaroni1/Data/Images/Normal/0968.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/macaroni1/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/macaroni1.dino_b6b12b18b24.npz"
+    },
+    "macaroni2": {
+      "train_normal_count": 900,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0121.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0367.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0613.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0874.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0217.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0275.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0338.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0398.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0460.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0526.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0585.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0649.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0715.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0780.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0843.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0905.JPG",
+        "/home/lxq/Data/VisA/macaroni2/Data/Images/Normal/0968.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/macaroni2/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/macaroni2.dino_b6b12b18b24.npz"
+    },
+    "pcb1": {
+      "train_normal_count": 904,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0121.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0368.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0616.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0876.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0217.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0276.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0339.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0399.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0461.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0528.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0587.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0651.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0717.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0783.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0846.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0907.JPG",
+        "/home/lxq/Data/VisA/pcb1/Data/Images/Normal/0970.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/pcb1/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/pcb1.dino_b6b12b18b24.npz"
+    },
+    "pcb2": {
+      "train_normal_count": 901,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0121.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0367.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0614.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0874.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0217.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0275.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0338.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0398.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0460.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0526.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0585.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0649.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0715.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0780.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0842.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0904.JPG",
+        "/home/lxq/Data/VisA/pcb2/Data/Images/Normal/0967.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/pcb2/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/pcb2.dino_b6b12b18b24.npz"
+    },
+    "pcb3": {
+      "train_normal_count": 905,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0122.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0369.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0618.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0877.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0218.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0276.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0339.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0401.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0462.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0528.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0587.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0652.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0718.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0783.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0847.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0908.JPG",
+        "/home/lxq/Data/VisA/pcb3/Data/Images/Normal/0971.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/pcb3/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/pcb3.dino_b6b12b18b24.npz"
+    },
+    "pcb4": {
+      "train_normal_count": 904,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0121.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0368.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0616.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0876.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0034.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0091.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0150.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0217.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0276.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0339.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0399.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0461.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0528.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0587.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0651.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0717.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0783.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0846.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0907.JPG",
+        "/home/lxq/Data/VisA/pcb4/Data/Images/Normal/0970.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/pcb4/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/pcb4.dino_b6b12b18b24.npz"
+    },
+    "pipe_fryum": {
+      "train_normal_count": 450,
+      "selection_strategy": "official_train_normal_sorted_path_stratum_centers",
+      "normal_images": [
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/061.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/184.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/306.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/436.JPG"
+      ],
+      "calibration_images": [
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/016.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/045.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/075.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/109.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/138.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/169.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/199.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/229.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/259.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/291.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/322.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/355.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/387.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/421.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/452.JPG",
+        "/home/lxq/Data/VisA/pipe_fryum/Data/Images/Normal/485.JPG"
+      ],
+      "calibration_view": "/home/lxq/pro-innovation/datasets/visa_calibration/pipe_fryum/normal",
+      "patch_bank": "/home/lxq/pro-innovation/memory_banks/4-shot/visa/pipe_fryum.dino_b6b12b18b24.npz"
+    }
+  }
+}

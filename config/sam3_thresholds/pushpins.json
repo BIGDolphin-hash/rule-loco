@@ -1,0 +1,277 @@
+{
+  "schema": "pro-innovation.sam3-object-thresholds.v3",
+  "class_name": "pushpins",
+  "status": "complete",
+  "method": "few-shot-confidence-object-specific-q95-q05-floor010-v3",
+  "calibration_scope": "normal_only",
+  "calibration_samples": 4,
+  "proposal_threshold": 0.6,
+  "threshold_grid_step": 0.1,
+  "threshold_rounding": "floor",
+  "model_parameters_updated": false,
+  "normal_images": [
+    "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/012.png",
+    "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/017.png",
+    "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/022.png",
+    "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/025.png"
+  ],
+  "truth_templates": [
+    "/home/lxq/pro-innovation/templates/store/pushpins.standard.rules",
+    "/home/lxq/pro-innovation/templates/store/pushpins.standard.rules",
+    "/home/lxq/pro-innovation/templates/store/pushpins.standard.rules",
+    "/home/lxq/pro-innovation/templates/store/pushpins.standard.rules"
+  ],
+  "selected_thresholds": {
+    "pushpin": 0.70,
+    "square_compartment": 0.60
+  },
+  "calibrations": {
+    "pushpin": {
+      "status": "calibrated",
+      "failure_reason": null,
+      "samples": [
+        {
+          "sample_index": 0,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/012.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.9609375,
+            0.95703125,
+            0.95703125,
+            0.953125,
+            0.953125,
+            0.953125,
+            0.94921875,
+            0.94921875,
+            0.94921875,
+            0.94921875,
+            0.94921875,
+            0.94921875,
+            0.94921875,
+            0.94140625,
+            0.92578125
+          ],
+          "keep_boundary_score": 0.92578125,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        },
+        {
+          "sample_index": 1,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/017.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.96484375,
+            0.96484375,
+            0.9609375,
+            0.9609375,
+            0.9609375,
+            0.9609375,
+            0.9609375,
+            0.95703125,
+            0.95703125,
+            0.953125,
+            0.94921875,
+            0.94921875,
+            0.9453125,
+            0.94140625,
+            0.9375
+          ],
+          "keep_boundary_score": 0.9375,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        },
+        {
+          "sample_index": 2,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/022.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.96484375,
+            0.9609375,
+            0.95703125,
+            0.95703125,
+            0.95703125,
+            0.95703125,
+            0.953125,
+            0.953125,
+            0.953125,
+            0.953125,
+            0.953125,
+            0.94921875,
+            0.94921875,
+            0.9453125,
+            0.9375
+          ],
+          "keep_boundary_score": 0.9375,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        },
+        {
+          "sample_index": 3,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/025.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.9609375,
+            0.95703125,
+            0.95703125,
+            0.95703125,
+            0.95703125,
+            0.953125,
+            0.953125,
+            0.953125,
+            0.94921875,
+            0.94921875,
+            0.9453125,
+            0.9453125,
+            0.94140625,
+            0.94140625,
+            0.94140625
+          ],
+          "keep_boundary_score": 0.94140625,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        }
+      ],
+      "lower_bound_q95_extra": 0.6,
+      "upper_bound_q05_keep": 0.9275390625,
+      "stable_range": [
+        0.6,
+        0.9275390625
+      ],
+      "raw_selected_threshold": 0.7637695312499999,
+      "selected_threshold": 0.70
+    },
+    "square_compartment": {
+      "status": "calibrated",
+      "failure_reason": null,
+      "samples": [
+        {
+          "sample_index": 0,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/012.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.78125,
+            0.78125,
+            0.77734375,
+            0.7734375,
+            0.76953125,
+            0.7578125,
+            0.75390625,
+            0.75390625,
+            0.75,
+            0.75,
+            0.75,
+            0.7421875,
+            0.73046875,
+            0.72265625,
+            0.69921875
+          ],
+          "keep_boundary_score": 0.69921875,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        },
+        {
+          "sample_index": 1,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/017.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.796875,
+            0.79296875,
+            0.79296875,
+            0.78125,
+            0.78125,
+            0.78125,
+            0.78125,
+            0.77734375,
+            0.7734375,
+            0.7734375,
+            0.76953125,
+            0.76953125,
+            0.75390625,
+            0.75,
+            0.7265625
+          ],
+          "keep_boundary_score": 0.7265625,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        },
+        {
+          "sample_index": 2,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/022.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.80859375,
+            0.80859375,
+            0.8046875,
+            0.80078125,
+            0.796875,
+            0.796875,
+            0.796875,
+            0.78515625,
+            0.78515625,
+            0.78125,
+            0.78125,
+            0.77734375,
+            0.7734375,
+            0.7734375,
+            0.75390625
+          ],
+          "keep_boundary_score": 0.75390625,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        },
+        {
+          "sample_index": 3,
+          "image": "/home/lxq/Data/mvtec_loco_anomaly_detection/pushpins/train/good/025.png",
+          "true_count": 15,
+          "candidate_count_at_0_60": 15,
+          "candidate_scores": [
+            0.828125,
+            0.81640625,
+            0.81640625,
+            0.8125,
+            0.80859375,
+            0.8046875,
+            0.8046875,
+            0.8046875,
+            0.796875,
+            0.79296875,
+            0.79296875,
+            0.79296875,
+            0.7734375,
+            0.7734375,
+            0.765625
+          ],
+          "keep_boundary_score": 0.765625,
+          "extra_boundary_score": null,
+          "extra_score_upper_bound": 0.6
+        }
+      ],
+      "lower_bound_q95_extra": 0.6,
+      "upper_bound_q05_keep": 0.7033203125,
+      "stable_range": [
+        0.6,
+        0.7033203125
+      ],
+      "raw_selected_threshold": 0.65166015625,
+      "selected_threshold": 0.60
+    }
+  },
+  "configuration": {
+    "sam3_prompt": "{category}",
+    "sam3_checkpoint": "/home/lxq/weights/sam3/sam3.pt",
+    "mask_dedup_iou_threshold": 0.8,
+    "mask_dedup_containment_threshold": 0.85,
+    "mask_minimum_area_pixels": 16,
+    "mask_cleanup_enabled": true,
+    "mask_dedup_enabled": true,
+    "standard_template": "/home/lxq/pro-innovation/templates/store/pushpins.standard.rules",
+    "standard_template_sha256": "b747ab529a9a9e8c34f1eba83790518b32ddaab4e5373763f75f673a2426fbf0"
+  }
+}

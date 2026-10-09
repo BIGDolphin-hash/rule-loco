@@ -1,0 +1,6 @@
+{
+  "part_a_color": ["red", "blue", "yellow"],
+  "part_b_material": ["metal", "plastic", "wood", "rubber"],
+  "fruit_icon_type": ["orange", "banana", "cherry"],
+  "liquid_color": ["red", "yellow"]
+}

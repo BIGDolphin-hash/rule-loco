@@ -28,3 +28,6 @@ paper_draft*.md
 *.ckpt
 *.npz
 *.npy
+
+/assets/
+/tests/

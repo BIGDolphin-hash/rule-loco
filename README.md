@@ -66,14 +66,6 @@ PYTHONPATH=src python scripts/global_patch_ordered/build_memory.py \
 
 评估参数及可用调度选项以入口的 `--help` 为准。数据、权重、模板实例和记忆库需要在本地准备；上述命令不表示仓库包含这些文件。
 
-## 验证
-
-无需加载模型权重的 GPO-JM 核心单元测试：
-
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -p test_global_patch_ordered_memory.py
-```
-
 ## 发布范围
 
-本仓库只发布源码、测试、必要配置和模板格式示例。不发布数据集、模型权重、正常记忆库、缓存、实验结果、运行日志、本地工具状态、论文草稿或本地模板实例。历史架构图片仅供参考，当前实现以源码为准。
+本仓库只发布源码、必要配置和模板格式示例。不发布数据集、模型权重、正常记忆库、缓存、实验结果、运行日志、本地工具状态、论文草稿或本地模板实例。

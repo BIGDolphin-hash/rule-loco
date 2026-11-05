@@ -1,8 +1,4 @@
-"""GPO-JM-owned ordered semantic descriptor construction.
-
-The implementation is intentionally local to GPO-JM.  GCDA has its own copy
-because the two modules must remain independent.
-"""
+"""Category-ordered semantic descriptors owned by GPO-JM."""
 
 from __future__ import annotations
 

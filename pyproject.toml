@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pro-innovation"
 version = "0.1.0"
-description = "Rule-first PSAD composition and DINOv2 patch anomaly detection"
+description = "Template-driven rules and GPO-JM anomaly detection"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

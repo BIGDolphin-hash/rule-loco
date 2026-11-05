@@ -1,8 +1,3 @@
-"""Independent post-rule memory modules.
+"""GPO-JM memory implementation."""
 
-Each child package owns its implementation and may depend only on the neutral
-pipeline contracts under :mod:`pro_innovation`.  Child packages must never
-import one another.
-"""
-
-__all__ = ("global_patch", "gpstm", "gcda", "gpojm")
+__all__ = ("gpojm",)

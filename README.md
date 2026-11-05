@@ -1,6 +1,6 @@
 # Rule-LOCO
 
-面向工业视觉异常检测的显式规则与正常记忆库研究实现。本次源码更新包含五类规则、共享 SAM3 掩码、DINOv2 特征提取，以及 GPO-JM（Global Patch Ordered Joint Memory）。同时保留 CLI 所依赖的 Global Patch、GPSTM 和 GCDA 模块。
+面向工业视觉异常检测的显式规则与正常记忆库研究实现。本次源码更新包含五类规则、共享 SAM3 掩码、DINOv2 特征提取，以及 GPO-JM（Global Patch Ordered Joint Memory）。
 
 ## 核心流程
 
@@ -46,15 +46,9 @@ PYTHONPATH=src python scripts/global_patch_ordered/evaluate_rule_gpojm_mvtec_loc
 
 `examples/` 提供模板格式示例。请自行准备目标类别的通用与标准模板，以及合法取得的数据集。`config/` 中包含属性词表及五类对象的 SAM3 阈值配置；阈值配置中的标定图像路径仅是来源记录，不包含图像。
 
-先通过 CLI 的 `build-patch-memory` 创建正常 Global Patch 记忆，再通过 `build_memory.py` 创建 GPO-JM 联合记忆：
+GPO-JM 联合建库需要预先准备兼容的底层 Patch 记忆文件（`--global-bank`）。当前发布版只提供 GPO-JM 联合建库和推理代码，不包含该底层记忆文件的生成器；记忆文件需要在外部准备。联合建库示例：
 
 ```bash
-PYTHONPATH=src python -m pro_innovation build-patch-memory \
-  --class-name screw_bag \
-  --normal-dir datasets/mvtec_loco_anomaly_detection/screw_bag/train/good \
-  --output memory_banks/screw_bag.global.npz \
-  --patch-dinov2-checkpoint weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth
-
 PYTHONPATH=src python scripts/global_patch_ordered/build_memory.py \
   --class-name screw_bag \
   --normal-dir datasets/mvtec_loco_anomaly_detection/screw_bag/train/good \

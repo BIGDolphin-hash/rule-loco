@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pro-innovation"
 version = "0.1.0"
-description = "Rule and DINOv2 patch image-level anomaly detection"
+description = "Rule-first PSAD composition and DINOv2 patch anomaly detection"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

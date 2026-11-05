@@ -14,7 +14,7 @@ from ..errors import ModelAdapterError
 
 
 DEFAULT_PATCH_DINOV2_CHECKPOINT = (
-    "/home/lxq/weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth"
+    "weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth"
 )
 PATCH_MATCHING_LAYERS = (6, 12, 18, 24)
 PATCH_MATCHING_INPUT_SIZE = 448
@@ -78,13 +78,20 @@ class DinoV2PatchFeatureExtractor:
         self._torch = torch
         self._model = model
 
+    def initialize(self) -> None:
+        """Load the model before per-image timing begins."""
+
+        self._load()
+
     @staticmethod
     def _image(image: Any) -> Image.Image:
         if isinstance(image, Image.Image):
             return image.convert("RGB")
         if isinstance(image, (str, Path)):
             with Image.open(image) as opened:
-                return opened.convert("RGB")
+                converted = opened.convert("RGB")
+                converted.load()
+                return converted.copy()
         array = np.asarray(image)
         if array.ndim != 3 or array.shape[2] not in {3, 4}:
             raise ModelAdapterError(f"expected an RGB image, got shape {array.shape}")
@@ -124,17 +131,7 @@ class DinoV2PatchFeatureExtractor:
                     norm=True,
                 )
 
-        try:
-            use_autocast = self.device.startswith("cuda")
-            outputs = forward(autocast_enabled=use_autocast)
-            if use_autocast and any(
-                not self._torch.isfinite(output[0]).all() for output in outputs
-            ):
-                outputs = forward(autocast_enabled=False)
-        except Exception as exc:  # pragma: no cover - heavyweight runtime
-            raise ModelAdapterError(f"DINOv2 patch extraction failed: {exc}") from exc
-
-        try:
+        def prepare(outputs: Any) -> tuple[PatchFeatureBundle, ...]:
             bundles: list[dict[int, Any]] = [
                 {} for _ in range(int(tensor.shape[0]))
             ]
@@ -182,10 +179,39 @@ class DinoV2PatchFeatureExtractor:
                 )
                 for bundle in bundles
             )
+
+        def invalid_locations(
+            bundles: tuple[PatchFeatureBundle, ...],
+        ) -> list[str]:
+            return [
+                f"batch[{index}] Block {layer}"
+                for index, bundle in enumerate(bundles)
+                for layer, values in bundle.layer_features.items()
+                if not self._torch.isfinite(values).all()
+            ]
+
+        try:
+            use_autocast = self.device.startswith("cuda")
+            outputs = forward(autocast_enabled=use_autocast)
+            bundles = prepare(outputs)
+            invalid = invalid_locations(bundles)
+            # BF16 can remain finite at the transformer output but overflow or
+            # become NaN during interpolation/normalization.  Validate the
+            # final 64x64 features and repeat the whole batch in FP32.
+            if use_autocast and invalid:
+                outputs = forward(autocast_enabled=False)
+                bundles = prepare(outputs)
+                invalid = invalid_locations(bundles)
+            if invalid:
+                raise ModelAdapterError(
+                    "DINOv2 produced non-finite final patch features at "
+                    + ", ".join(invalid)
+                )
+            return bundles
         except ModelAdapterError:
             raise
         except Exception as exc:  # pragma: no cover - heavyweight runtime
-            raise ModelAdapterError(f"cannot prepare DINOv2 patch features: {exc}") from exc
+            raise ModelAdapterError(f"DINOv2 patch extraction failed: {exc}") from exc
 
     def extract(self, image: Any) -> PatchFeatureBundle:
         self._load()
@@ -206,9 +232,26 @@ class DinoV2PatchFeatureExtractor:
         self._load()
         result: list[PatchFeatureBundle] = []
         for start in range(0, len(images), int(batch_size)):
+            chunk = images[start : start + int(batch_size)]
             tensors = [
                 self._preprocess(image)
-                for image in images[start : start + int(batch_size)]
+                for image in chunk
             ]
-            result.extend(self._extract_tensor(self._torch.cat(tensors, dim=0)))
+            try:
+                result.extend(self._extract_tensor(self._torch.cat(tensors, dim=0)))
+            except ModelAdapterError as exc:
+                if len(chunk) == 1:
+                    raise ModelAdapterError(
+                        f"DINOv2 patch extraction failed for {chunk[0]}: {exc}"
+                    ) from exc
+                # A single unstable image must not poison an otherwise valid
+                # batch.  FP32 fallback is already applied by _extract_tensor;
+                # retrying one image at a time also lowers peak activation use.
+                for image, image_tensor in zip(chunk, tensors):
+                    try:
+                        result.extend(self._extract_tensor(image_tensor))
+                    except ModelAdapterError as single_exc:
+                        raise ModelAdapterError(
+                            f"DINOv2 patch extraction failed for {image}: {single_exc}"
+                        ) from single_exc
         return tuple(result)

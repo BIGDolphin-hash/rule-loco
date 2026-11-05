@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Protocol, Sequence
 
-from .models import AttributePrediction, MaskInstance, PatchEvidence
+from .models import (
+    AttributePrediction,
+    CompositionEvidence,
+    MaskInstance,
+    PatchEvidence,
+)
 
 
 class Segmenter(Protocol):
@@ -37,6 +42,21 @@ class AttributeDetector(Protocol):
 class PatchAnomalyScorer(Protocol):
     def score(self, image: Any) -> PatchEvidence:
         """Return full-image patch evidence."""
+
+
+class SharedFeatureExtractor(Protocol):
+    def extract_features(self, image: Any) -> Any:
+        """Return one shared DINO feature bundle without scoring Patch memory."""
+
+
+class CompositionAnomalyScorer(Protocol):
+
+    def score_features(
+        self,
+        features: Any,
+        mask_pool: Mapping[str, Sequence[MaskInstance]],
+    ) -> CompositionEvidence:
+        """Return post-rule memory evidence from shared features and object masks."""
 
 
 class StandardTemplateGenerator(Protocol):

@@ -25,7 +25,9 @@ from .attributes import (
     validate_color_candidates,
 )
 from .mask_processing import MaskPostprocessor
-from .patch_memory import (
+from .memory_modules.global_patch import (
+    PATCH_FEATURE_GLOBAL,
+    DEFAULT_CORESET_RATIO,
     DEFAULT_PATCH_LAYER_FUSION,
     patch_memory_run_tag,
     DinoV2PatchImageScorer,
@@ -34,10 +36,10 @@ from .patch_memory import (
 from .models import Rule, TaskType
 from .pipeline import (
     LogicAnomalyPipeline,
+    RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
     SCORE_FUSION_POLICY,
 )
 from .templates import collect_categories, parse_template
-
 
 MVTEC_LOCO = "mvtec_loco"
 MVTEC_AD = "mvtec_ad"
@@ -154,21 +156,15 @@ def binary_auroc(labels: Sequence[int], scores: Sequence[float]) -> float:
             label for _, label in ordered[index:end]
         )
         index = end
-    return (
-        positive_rank_sum - positives * (positives + 1) / 2.0
-    ) / (positives * negatives)
+    return (positive_rank_sum - positives * (positives + 1) / 2.0) / (
+        positives * negatives
+    )
 
 
-def infer_tolerance_percent(
-    rules: Sequence[Rule], task: TaskType
-) -> float | None:
+def infer_tolerance_percent(rules: Sequence[Rule], task: TaskType) -> float | None:
     tolerances = []
     for rule in rules:
-        if (
-            rule.task is task
-            and rule.minimum is not None
-            and rule.maximum is not None
-        ):
+        if rule.task is task and rule.minimum is not None and rule.maximum is not None:
             center = (rule.minimum + rule.maximum) / 2.0
             if center > 0.0:
                 tolerances.append(
@@ -212,26 +208,27 @@ def infer_measurement_tag(rules: Sequence[Rule]) -> str:
 
 def build_run_stem(
     class_name: str,
-    sam3_threshold: float,
-    length_tolerance_percent: float | None,
-    clip_threshold: float = 0.35,
-    mask_dedup_iou: float = 0.80,
-    mask_dedup_containment: float = 0.85,
-    mask_min_area: int = 16,
-    mask_cleanup: bool = True,
-    mask_dedup: bool = True,
-    measurement_tag: str | None = None,
+    *,
     rule_inference_enabled: bool = True,
     patch_enabled: bool = False,
+    patch_feature_mode: str = PATCH_FEATURE_GLOBAL,
     include_structural_anomalies: bool = False,
-    sam3_category_thresholds: Mapping[str, float] | None = None,
     test_splits: Sequence[str] | None = None,
     dataset_name: str = MVTEC_LOCO,
+    patch_coreset_ratio: float = DEFAULT_CORESET_RATIO,
 ) -> str:
-    safe_class = re.sub(r"[^A-Za-z0-9_-]+", "_", class_name).strip("_")
-    patch_tag = patch_memory_run_tag() if patch_enabled else "rules"
-    scope = "-".join(test_splits) if test_splits else (
-        "good-logical-structural" if include_structural_anomalies else "good-logical"
+    if patch_feature_mode != PATCH_FEATURE_GLOBAL:
+        raise ValueError("only global Patch matching is supported")
+    safe_class = re.sub("[^A-Za-z0-9_-]+", "_", class_name).strip("_")
+    patch_tag = patch_memory_run_tag(patch_coreset_ratio) if patch_enabled else "rules"
+    scope = (
+        "-".join(test_splits)
+        if test_splits
+        else (
+            "good-logical-structural"
+            if include_structural_anomalies
+            else "good-logical"
+        )
     )
     tags = [safe_class, patch_tag]
     if dataset_name != MVTEC_LOCO:
@@ -242,6 +239,41 @@ def build_run_stem(
     return "_".join(tags)
 
 
+def build_result_layout(
+    class_name: str,
+    *,
+    rule_inference_enabled: bool = True,
+    rule_memory_schedule: str = RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
+    patch_enabled: bool = False,
+    patch_feature_mode: str = PATCH_FEATURE_GLOBAL,
+    test_splits: Sequence[str],
+    dataset_name: str = MVTEC_LOCO,
+    patch_coreset_ratio: float = DEFAULT_CORESET_RATIO,
+) -> tuple[tuple[str, ...], str]:
+    """Return configuration directories and a scope-only result filename."""
+    if patch_feature_mode != PATCH_FEATURE_GLOBAL:
+        raise ValueError("only global Patch matching is supported")
+    safe_class = re.sub("[^A-Za-z0-9_-]+", "_", class_name).strip("_")
+    directories: list[str] = []
+    if dataset_name != MVTEC_LOCO:
+        directories.append(dataset_name)
+    directories.append(safe_class)
+    if patch_enabled:
+        directories.append(patch_memory_run_tag(patch_coreset_ratio))
+    else:
+        directories.append("rules")
+    if not rule_inference_enabled:
+        directories.append("patch-only")
+    elif patch_enabled:
+        directories.append(f"schedule-{rule_memory_schedule}")
+    scope_aliases = {
+        "logical_anomalies": "logical",
+        "structural_anomalies": "structural",
+    }
+    scope = "-".join((scope_aliases.get(split, split) for split in test_splits))
+    return (tuple(directories), scope)
+
+
 def validate_attribute_vocabulary(
     rules: Sequence[Rule], vocabulary: Mapping[str, Sequence[str]]
 ) -> None:
@@ -250,14 +282,7 @@ def validate_attribute_vocabulary(
     required: set[tuple[str, str]] = set()
     expected_by_key: dict[str, set[str]] = {}
     for rule in rules:
-        if rule.task is TaskType.ATTRIBUTE_ERROR and rule.subject and rule.property:
-            required.add((rule.subject, rule.property))
-            if rule.expected is not None:
-                key = attribute_vocabulary_key(rule.subject, rule.property)
-                expected_by_key.setdefault(key, set()).add(
-                    str(rule.expected)
-                )
-        elif rule.task is TaskType.ATTRIBUTE_COMBINATION:
+        if rule.task is TaskType.ATTRIBUTE_COMBINATION:
             required.update((item.subject, item.property) for item in rule.attributes)
             if isinstance(rule.expected, tuple):
                 for combination in rule.expected:
@@ -268,9 +293,7 @@ def validate_attribute_vocabulary(
                 for item in rule.attributes:
                     if item.expected is not None:
                         key = attribute_vocabulary_key(item.subject, item.property)
-                        expected_by_key.setdefault(key, set()).add(
-                            str(item.expected)
-                        )
+                        expected_by_key.setdefault(key, set()).add(str(item.expected))
 
     missing = []
     absent_values: list[str] = []
@@ -324,6 +347,97 @@ def _load_completed(path: Path) -> dict[str, dict[str, Any]]:
     return completed
 
 
+def build_sam3_dataset_cache(
+    *,
+    class_name: str,
+    dataset_root: str | Path,
+    generic_path: str | Path,
+    cache_root: str | Path,
+    sam3_threshold: float,
+    sam3_repo: str | Path,
+    sam3_checkpoint: str | Path,
+    device: str = "cuda",
+    sam3_prompt: str = "{category}",
+    test_splits: Sequence[str] | None = None,
+    dataset_name: str = MVTEC_LOCO,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Materialize reusable, pre-postprocessing SAM3 proposals for a dataset."""
+
+    dataset = Path(dataset_root).expanduser().resolve()
+    generic_file = Path(generic_path).expanduser().resolve()
+    cache = Path(cache_root).expanduser().resolve()
+    if not dataset.is_dir():
+        raise ValueError(f"dataset test directory not found: {dataset}")
+    generic = parse_template(
+        generic_file.read_text(encoding="utf-8"), allow_missing_values=True
+    )
+    categories = collect_categories(generic)
+    if not categories:
+        raise ValueError("SAM3 cache requires at least one template category")
+    split_specs = _split_specs_for_dataset(dataset_name, dataset)
+    selected_splits = (
+        tuple(test_splits) if test_splits is not None else tuple(split_specs)
+    )
+    if any(split not in split_specs for split in selected_splits):
+        raise ValueError(f"unsupported test split selection: {selected_splits}")
+    samples = _collect_evaluation_samples(
+        dataset_name=dataset_name,
+        dataset_root=dataset,
+        class_name=class_name,
+        selected_splits=selected_splits,
+        split_specs=split_specs,
+    )
+    if not samples:
+        raise ValueError(f"no evaluation images found under {dataset}")
+
+    segmenter = Sam3Segmenter(
+        repo_path=sam3_repo,
+        checkpoint_path=sam3_checkpoint,
+        device=device,
+        confidence_threshold=sam3_threshold,
+        prompt_template=sam3_prompt,
+        cache_root=cache,
+        cache_mode="refresh" if refresh else "read-write",
+    )
+    started = time.perf_counter()
+    failures: list[dict[str, str]] = []
+    for index, (path, _, split) in enumerate(samples, start=1):
+        try:
+            segmenter.segment(path, categories)
+            status = "cached"
+        except Exception as exc:
+            failures.append(
+                {"image": str(path), "error": f"{type(exc).__name__}: {exc}"}
+            )
+            status = "failed"
+        print(
+            f"[{index}/{len(samples)}] {split}/{path.name} {status} "
+            f"hits={segmenter.cache_hits} writes={segmenter.cache_writes}",
+            flush=True,
+        )
+    return {
+        "class_name": class_name,
+        "dataset_name": dataset_name,
+        "dataset_root": str(dataset),
+        "generic_template": str(generic_file),
+        "cache_root": str(cache),
+        "cache_schema": Sam3Segmenter.CACHE_SCHEMA,
+        "cache_mode": segmenter.cache_mode,
+        "proposal_threshold": sam3_threshold,
+        "sam3_prompt": sam3_prompt,
+        "categories": list(categories),
+        "test_splits": list(selected_splits),
+        "sample_count": len(samples),
+        "cache_hits": segmenter.cache_hits,
+        "cache_misses": segmenter.cache_misses,
+        "cache_writes": segmenter.cache_writes,
+        "failure_count": len(failures),
+        "failures": failures,
+        "elapsed_seconds": time.perf_counter() - started,
+    }
+
+
 def evaluate_dataset(
     *,
     class_name: str,
@@ -339,15 +453,15 @@ def evaluate_dataset(
     clip_threshold: float = 0.35,
     attribute_vocabulary: Mapping[str, Sequence[str]] | None = None,
     device: str = "cuda",
-    grouping_tolerance: float = 0.10,
+    grouping_tolerance: float = 0.1,
     sam3_prompt: str = "{category}",
-    mask_dedup_iou: float = 0.80,
+    mask_dedup_iou: float = 0.8,
     mask_dedup_containment: float = 0.85,
-    mask_min_area: int = 16,
-    mask_cleanup: bool = True,
     mask_dedup: bool = True,
     rule_inference_enabled: bool = True,
+    rule_memory_schedule: str = RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
     patch_enabled: bool = False,
+    patch_feature_mode: str = PATCH_FEATURE_GLOBAL,
     patch_bank_path: str | Path | None = None,
     patch_dinov2_checkpoint: str | Path = DEFAULT_PATCH_DINOV2_CHECKPOINT,
     patch_query_batch_size: int = 256,
@@ -360,19 +474,36 @@ def evaluate_dataset(
     test_split: str | None = None,
     test_splits: Sequence[str] | None = None,
     dataset_name: str = MVTEC_LOCO,
+    sam3_cache_root: str | Path | None = None,
+    sam3_cache_mode: str = "off",
 ) -> dict[str, Any]:
+    if patch_feature_mode != PATCH_FEATURE_GLOBAL:
+        raise ValueError("only global Patch matching is supported")
+    category_threshold_policy_active = bool(
+        sam3_threshold_policy_path is not None and sam3_category_thresholds
+    )
+    if patch_enabled:
+        patch_feature_mode = "global"
     dataset = Path(dataset_root).expanduser().resolve()
     output_root = Path(result_root).expanduser().resolve()
     if not dataset.is_dir():
         raise ValueError(f"dataset test directory not found: {dataset}")
-    if not rule_inference_enabled:
-        if not patch_enabled:
-            raise ValueError("disabled rule inference requires patch matching")
+    mask_inference_enabled = rule_inference_enabled
+    if not rule_inference_enabled and (not patch_enabled):
+        raise ValueError("disabled rule inference requires patch matching")
+    if mask_inference_enabled:
+        if generic_path is None:
+            raise ValueError("mask-based inference requires a generic template")
+        generic_file = Path(generic_path).expanduser().resolve()
+        generic = parse_template(
+            generic_file.read_text(encoding="utf-8"), allow_missing_values=True
+        )
+    else:
         generic_file = None
+        generic = ()
+    if not rule_inference_enabled:
         standard_file = None
-        generic: tuple[Rule, ...] = ()
         standard: tuple[Rule, ...] = ()
-        categories: tuple[str, ...] = ()
         vocabulary: dict[str, Sequence[str]] = {}
         length_tolerance = None
         area_tolerance = None
@@ -380,13 +511,8 @@ def evaluate_dataset(
     else:
         if generic_path is None or standard_path is None:
             raise ValueError("rule inference requires generic and standard templates")
-        generic_file = Path(generic_path).expanduser().resolve()
         standard_file = Path(standard_path).expanduser().resolve()
-        generic = parse_template(
-            generic_file.read_text(encoding="utf-8"), allow_missing_values=True
-        )
         standard = parse_template(standard_file.read_text(encoding="utf-8"))
-        categories = collect_categories(generic)
         vocabulary = dict(attribute_vocabulary or {})
         validate_attribute_vocabulary(standard, vocabulary)
         length_tolerance = infer_length_tolerance_percent(standard)
@@ -398,44 +524,62 @@ def evaluate_dataset(
     selected_splits = (
         tuple(test_splits)
         if test_splits is not None
-        else (test_split,)
-        if test_split is not None
-        else tuple(split_specs)
-        if dataset_name in {MVTEC_AD, VISA}
-        and include_structural_anomalies is not False
-        else ("good",)
-        if dataset_name == MVTEC_AD
-        else ("Normal",)
-        if dataset_name == VISA
-        else ("good", "logical_anomalies", "structural_anomalies")
-        if include_structural_anomalies
-        else ("good", "logical_anomalies")
+        else (
+            (test_split,)
+            if test_split is not None
+            else (
+                tuple(split_specs)
+                if dataset_name in {MVTEC_AD, VISA}
+                and include_structural_anomalies is not False
+                else (
+                    ("good",)
+                    if dataset_name == MVTEC_AD
+                    else (
+                        ("Normal",)
+                        if dataset_name == VISA
+                        else (
+                            ("good", "logical_anomalies", "structural_anomalies")
+                            if include_structural_anomalies
+                            else ("good", "logical_anomalies")
+                        )
+                    )
+                )
+            )
+        )
     )
-    if any(split not in split_specs for split in selected_splits):
+    if any((split not in split_specs for split in selected_splits)):
         raise ValueError(f"unsupported test split selection: {selected_splits}")
-    include_structural = any(split_specs[split][1] for split in selected_splits)
-    run_stem = build_run_stem(
-        class_name=class_name,
-        sam3_threshold=sam3_threshold,
-        length_tolerance_percent=length_tolerance,
-        clip_threshold=clip_threshold,
-        mask_dedup_iou=mask_dedup_iou,
-        mask_dedup_containment=mask_dedup_containment,
-        mask_min_area=mask_min_area,
-        mask_cleanup=mask_cleanup,
-        mask_dedup=mask_dedup,
-        measurement_tag=measurement_tag,
+    include_structural = any((split_specs[split][1] for split in selected_splits))
+    patch_bank: PatchMemoryBank | None = None
+    if patch_enabled:
+        if patch_bank_path is None:
+            raise ValueError(
+                "patch matching is enabled but no patch memory bank was provided"
+            )
+        patch_bank = PatchMemoryBank.load(
+            patch_bank_path,
+            expected_class_name=class_name,
+            expected_checkpoint_path=patch_dinov2_checkpoint,
+        )
+    patch_coreset_ratio = (
+        getattr(patch_bank, "coreset_ratio", DEFAULT_CORESET_RATIO)
+        if patch_bank is not None
+        else DEFAULT_CORESET_RATIO
+    )
+    result_directories, scope_name = build_result_layout(
+        class_name,
         rule_inference_enabled=rule_inference_enabled,
+        rule_memory_schedule=rule_memory_schedule,
         patch_enabled=patch_enabled,
-        include_structural_anomalies=include_structural,
-        sam3_category_thresholds=sam3_category_thresholds,
+        patch_feature_mode=patch_feature_mode,
         test_splits=selected_splits,
         dataset_name=dataset_name,
+        patch_coreset_ratio=patch_coreset_ratio,
     )
-    progress_path = output_root / f"{run_stem}.jsonl"
-    summary_path = output_root / f"{run_stem}_summary.json"
-    output_root.mkdir(parents=True, exist_ok=True)
-
+    run_directory = output_root.joinpath(*result_directories)
+    progress_path = run_directory / f"{scope_name}.jsonl"
+    summary_path = run_directory / f"{scope_name}_summary.json"
+    run_directory.mkdir(parents=True, exist_ok=True)
     samples = _collect_evaluation_samples(
         dataset_name=dataset_name,
         dataset_root=dataset,
@@ -445,9 +589,8 @@ def evaluate_dataset(
     )
     if not samples:
         raise ValueError(f"no evaluation images found under {dataset}")
-
     completed = {} if restart else _load_completed(progress_path)
-    if rule_inference_enabled:
+    if mask_inference_enabled:
         segmenter = Sam3Segmenter(
             repo_path=sam3_repo,
             checkpoint_path=sam3_checkpoint,
@@ -455,29 +598,31 @@ def evaluate_dataset(
             confidence_threshold=sam3_threshold,
             category_thresholds=sam3_category_thresholds,
             prompt_template=sam3_prompt,
+            cache_root=sam3_cache_root,
+            cache_mode=sam3_cache_mode,
         )
-        clip_runtime = LocalClipRuntime(
-            repo_path=clip_repo,
-            checkpoint_path=clip_checkpoint,
-            device=device,
-        )
-        clip_detector = ClipAttributeDetector(
-            repo_path=clip_repo,
-            checkpoint_path=clip_checkpoint,
-            vocabulary=vocabulary,
-            device=device,
-            confidence_threshold=clip_threshold,
-            runtime=clip_runtime,
-        )
-        detector = RoutedAttributeDetector(
-            semantic_detector=clip_detector if vocabulary else None,
-            vocabulary=vocabulary,
-        )
+        if rule_inference_enabled:
+            clip_runtime = LocalClipRuntime(
+                repo_path=clip_repo, checkpoint_path=clip_checkpoint, device=device
+            )
+            clip_detector = ClipAttributeDetector(
+                repo_path=clip_repo,
+                checkpoint_path=clip_checkpoint,
+                vocabulary=vocabulary,
+                device=device,
+                confidence_threshold=clip_threshold,
+                runtime=clip_runtime,
+            )
+            detector = RoutedAttributeDetector(
+                semantic_detector=clip_detector if vocabulary else None,
+                vocabulary=vocabulary,
+            )
+        else:
+            clip_runtime = None
+            detector = None
         mask_processor = MaskPostprocessor(
             dedup_iou_threshold=mask_dedup_iou,
             dedup_containment_threshold=mask_dedup_containment,
-            minimum_area_pixels=mask_min_area,
-            cleanup_enabled=mask_cleanup,
             dedup_enabled=mask_dedup,
         )
     else:
@@ -489,23 +634,16 @@ def evaluate_dataset(
     resolved_patch_bank: str | None = None
     patch_threshold: float | None = None
     if patch_enabled:
-        if patch_bank_path is None:
-            raise ValueError(
-                "patch matching is enabled but no patch memory bank was provided"
-            )
-        patch_bank = PatchMemoryBank.load(
-            patch_bank_path,
-            expected_class_name=class_name,
-            expected_checkpoint_path=patch_dinov2_checkpoint,
-        )
+        assert patch_bank_path is not None
+        assert patch_bank is not None
         resolved_patch_bank = str(Path(patch_bank_path).expanduser().resolve())
         patch_threshold = patch_bank.threshold
+        extractor = DinoV2PatchFeatureExtractor(
+            checkpoint_path=patch_dinov2_checkpoint, device=device
+        )
         patch_scorer = DinoV2PatchImageScorer(
             bank=patch_bank,
-            extractor=DinoV2PatchFeatureExtractor(
-                checkpoint_path=patch_dinov2_checkpoint,
-                device=device,
-            ),
+            extractor=extractor,
             query_batch_size=patch_query_batch_size,
             extraction_batch_size=patch_extraction_batch_size,
         )
@@ -516,8 +654,8 @@ def evaluate_dataset(
         patch_scorer=patch_scorer,
         grouping_tolerance=grouping_tolerance,
         rule_inference_enabled=rule_inference_enabled,
+        rule_memory_schedule=rule_memory_schedule,
     )
-
     run_started = time.perf_counter()
     mode = "w" if restart else "a"
     with progress_path.open(mode, encoding="utf-8") as progress:
@@ -538,16 +676,16 @@ def evaluate_dataset(
                     "split": split,
                     "label": label,
                     "score": report.image_anomaly_score,
-                    "status": report.status,
-                    "logical_anomaly": report.logical_anomaly,
                     "rule_inference_enabled": report.rule_inference_enabled,
+                    "rule_memory_schedule": rule_memory_schedule,
                     "execution_mode": report_payload["execution_mode"],
                     "patch_evidence": report_payload["patch_evidence"],
+                    "composition_evidence": report_payload["composition_evidence"],
+                    "timings_seconds": report_payload["timings_seconds"],
                     "mask_counts": dict(report.mask_counts),
                     "rules": [
                         {
                             "rule_id": item.rule_id,
-                            "satisfied": item.satisfied,
                             "actual": item.actual,
                             "expected": item.expected,
                             "violation_score": item.violation_score,
@@ -563,8 +701,9 @@ def evaluate_dataset(
                     "split": split,
                     "label": label,
                     "score": None,
-                    "status": "ERROR",
                     "patch_evidence": None,
+                    "composition_evidence": None,
+                    "timings_seconds": None,
                     "mask_counts": None,
                     "rules": None,
                     "elapsed_seconds": time.perf_counter() - started,
@@ -574,21 +713,17 @@ def evaluate_dataset(
             progress.flush()
             completed[image_key] = record
             print(
-                f"[{sample_index}/{len(samples)}] {split}/{path.name} "
-                f"score={record['score']} status={record['status']} "
-                f"seconds={record['elapsed_seconds']:.2f}",
+                f"[{sample_index}/{len(samples)}] {split}/{path.name} score={record['score']} seconds={record['elapsed_seconds']:.2f}",
                 flush=True,
             )
-
     records = [completed[str(path)] for path, _, _ in samples]
     failures = [record for record in records if record["score"] is None]
     valid = [record for record in records if record["score"] is not None]
-
     negative_splits = tuple(
-        split for split in selected_splits if split_specs[split][0] == 0
+        (split for split in selected_splits if split_specs[split][0] == 0)
     )
     positive_splits = tuple(
-        split for split in selected_splits if split_specs[split][0] == 1
+        (split for split in selected_splits if split_specs[split][0] == 1)
     )
 
     def subgroup_auroc(positive_split: str) -> float | None:
@@ -600,9 +735,9 @@ def evaluate_dataset(
         ]
         if not subset:
             return None
-        if not any(record["split"] == positive_split for record in subset):
+        if not any((record["split"] == positive_split for record in subset)):
             return None
-        if not any(record["split"] in negative_splits for record in subset):
+        if not any((record["split"] in negative_splits for record in subset)):
             return None
         return binary_auroc(
             [int(record["label"]) for record in subset],
@@ -615,19 +750,30 @@ def evaluate_dataset(
         "dataset": f"{DATASET_DISPLAY_NAMES[dataset_name]} {class_name}/test",
         "dataset_root": str(dataset),
         "scope": "+".join(selected_splits),
-        "negative_split": "+".join(negative_splits) or None,
-        "positive_split": "+".join(positive_splits) or None,
+        "negative_split": "+".join(negative_splits),
+        "positive_split": "+".join(positive_splits),
         "positive_splits": list(positive_splits),
         "include_structural_anomalies": include_structural,
         "rule_inference_enabled": rule_inference_enabled,
+        "rule_memory_schedule": (
+            rule_memory_schedule if rule_inference_enabled else None
+        ),
         "execution_mode": (
-            "rule_patch"
-            if rule_inference_enabled and patch_enabled
-            else "rule_only"
+            "rule_binary_memory_parallel"
             if rule_inference_enabled
-            else "patch_only"
+            and patch_enabled
+            and (rule_memory_schedule == "binary-parallel")
+            else (
+                "binary_selective_cascade"
+                if rule_inference_enabled and patch_enabled
+                else "rule_binary_only" if rule_inference_enabled else "patch_only"
+            )
         ),
         "patch_matching_enabled": patch_enabled,
+        "patch_feature_mode": patch_feature_mode if patch_enabled else None,
+        "category_threshold_policy_active": category_threshold_policy_active,
+        "result_configuration_directories": list(result_directories),
+        "result_scope_name": scope_name,
         "patch_bank_path": resolved_patch_bank,
         "patch_dinov2_checkpoint": (
             str(Path(patch_dinov2_checkpoint).expanduser().resolve())
@@ -635,34 +781,49 @@ def evaluate_dataset(
             else None
         ),
         "patch_layers": list(PATCH_MATCHING_LAYERS) if patch_enabled else [],
-        "patch_layer_fusion": (
-            DEFAULT_PATCH_LAYER_FUSION if patch_enabled else None
-        ),
-        "patch_primary_layer": None,
+        "patch_layer_fusion": DEFAULT_PATCH_LAYER_FUSION if patch_enabled else None,
         "patch_input_size": 448 if patch_enabled else None,
         "patch_feature_grid": [64, 64] if patch_enabled else None,
-        "patch_coreset_enabled": False if patch_enabled else None,
-        "patch_top_fraction": None,
-        "patch_position_radius": None,
+        "patch_coreset_enabled": True if patch_enabled else None,
+        "patch_coreset_ratio": (
+            getattr(patch_bank, "coreset_ratio", None) if patch_enabled else None
+        ),
+        "patch_coreset_seed": (
+            getattr(patch_bank, "coreset_seed", None) if patch_enabled else None
+        ),
+        "patch_coreset_patch_count": (
+            int(getattr(patch_bank, "coreset_patch_count"))
+            if patch_enabled and hasattr(patch_bank, "coreset_patch_count")
+            else (
+                int(getattr(patch_bank, "memory_source_indices", ()).numel())
+                if patch_enabled and hasattr(patch_bank, "memory_source_indices")
+                else 0
+            )
+        ),
         "patch_threshold": patch_threshold,
-        "patch_score_mean": patch_bank.score_mean if patch_enabled else None,
+        "patch_score_mean": (
+            getattr(patch_bank, "score_mean", None) if patch_enabled else None
+        ),
         "patch_score_unbiased_std": (
-            patch_bank.score_unbiased_std if patch_enabled else None
+            getattr(patch_bank, "score_unbiased_std", None) if patch_enabled else None
+        ),
+        "patch_psad_train_loo_max": (
+            getattr(patch_bank, "psad_scale", None) if patch_enabled else None
         ),
         "patch_calibration_mode": (
             patch_bank.calibration_mode if patch_enabled else None
         ),
         "patch_calibration_count": (
-            len(patch_bank.calibration_scores) if patch_enabled else 0
+            len(getattr(patch_bank, "calibration_scores", ()))
+            if patch_enabled
+            else 0
         ),
-        "patch_matching": (
-            "global_cosine_nearest_neighbor" if patch_enabled else None
-        ),
-        "patch_layer_aggregation": (
-            "mean_anomaly_map" if patch_enabled else None
-        ),
+        "patch_matching": "global_cosine_nearest_neighbor" if patch_enabled else None,
+        "patch_layer_aggregation": "mean_anomaly_map" if patch_enabled else None,
         "patch_image_aggregation": "spatial_max" if patch_enabled else None,
-        "patch_memory_scope": "full_image_only" if patch_enabled else None,
+        "patch_memory_scope": (
+            "all_train_good_images_patch_coreset" if patch_enabled else None
+        ),
         "patch_query_batch_size": patch_query_batch_size if patch_enabled else None,
         "patch_extraction_batch_size": (
             patch_extraction_batch_size if patch_enabled else None
@@ -670,49 +831,46 @@ def evaluate_dataset(
         "score_fusion_policy": (
             "patch_only_no_fusion"
             if not rule_inference_enabled
-            else SCORE_FUSION_POLICY
-            if patch_enabled
-            else "rule_only_raw_violation_max"
+            else (
+                SCORE_FUSION_POLICY
+                if patch_enabled
+                else "rule_only_decision_boundary_max_v1"
+            )
         ),
-        "sam3_confidence_threshold": (
-            sam3_threshold if rule_inference_enabled else None
-        ),
+        "sam3_confidence_threshold": sam3_threshold if mask_inference_enabled else None,
         "clip_attribute_confidence_threshold": (
             clip_threshold if rule_inference_enabled else None
         ),
         "sam3_global_fallback_threshold": (
-            sam3_threshold if rule_inference_enabled else None
+            sam3_threshold if mask_inference_enabled else None
         ),
         "sam3_category_thresholds": (
-            dict(sam3_category_thresholds or {})
-            if rule_inference_enabled
-            else {}
+            dict(sam3_category_thresholds or {}) if mask_inference_enabled else {}
         ),
         "sam3_threshold_policy": (
-            sam3_threshold_policy if rule_inference_enabled else "disabled"
+            sam3_threshold_policy if mask_inference_enabled else "disabled"
         ),
         "sam3_threshold_policy_path": (
             str(Path(sam3_threshold_policy_path).expanduser().resolve())
-            if rule_inference_enabled and sam3_threshold_policy_path is not None
+            if mask_inference_enabled and sam3_threshold_policy_path is not None
             else None
         ),
-        "mask_dedup_iou_threshold": (
-            mask_dedup_iou if rule_inference_enabled else None
-        ),
+        "mask_dedup_iou_threshold": mask_dedup_iou if mask_inference_enabled else None,
         "mask_dedup_containment_threshold": (
-            mask_dedup_containment if rule_inference_enabled else None
+            mask_dedup_containment if mask_inference_enabled else None
         ),
-        "mask_minimum_area_pixels": (
-            mask_min_area if rule_inference_enabled else None
+        "mask_dedup_enabled": mask_dedup if mask_inference_enabled else None,
+        "grouping_tolerance": grouping_tolerance if rule_inference_enabled else None,
+        "sam3_prompt": sam3_prompt if mask_inference_enabled else None,
+        "sam3_cache_root": (
+            str(Path(sam3_cache_root).expanduser().resolve())
+            if mask_inference_enabled and sam3_cache_root is not None
+            else None
         ),
-        "mask_cleanup_enabled": (
-            mask_cleanup if rule_inference_enabled else None
-        ),
-        "mask_dedup_enabled": mask_dedup if rule_inference_enabled else None,
-        "grouping_tolerance": (
-            grouping_tolerance if rule_inference_enabled else None
-        ),
-        "sam3_prompt": sam3_prompt if rule_inference_enabled else None,
+        "sam3_cache_mode": sam3_cache_mode if mask_inference_enabled else "off",
+        "sam3_cache_hits": segmenter.cache_hits if segmenter is not None else 0,
+        "sam3_cache_misses": segmenter.cache_misses if segmenter is not None else 0,
+        "sam3_cache_writes": segmenter.cache_writes if segmenter is not None else 0,
         "length_tolerance_percent": length_tolerance,
         "area_tolerance_percent": area_tolerance,
         "measurement_tag": measurement_tag,
@@ -720,8 +878,8 @@ def evaluate_dataset(
             key: list(values) for key, values in sorted(vocabulary.items())
         },
         "sample_count": len(samples),
-        "negative_count": sum(record["label"] == 0 for record in records),
-        "positive_count": sum(record["label"] == 1 for record in records),
+        "negative_count": sum((record["label"] == 0 for record in records)),
+        "positive_count": sum((record["label"] == 1 for record in records)),
         "valid_score_count": len(valid),
         "failure_count": len(failures),
         "image_auroc": (
@@ -729,36 +887,28 @@ def evaluate_dataset(
                 [int(record["label"]) for record in valid],
                 [float(record["score"]) for record in valid],
             )
-            if valid
-            and {int(record["label"]) for record in valid} == {0, 1}
+            if valid and {int(record["label"]) for record in valid} == {0, 1}
             else None
         ),
         "auroc_excluded_failure_count": len(failures),
         "logical_image_auroc": subgroup_auroc("logical_anomalies"),
         "structural_image_auroc": (
-            subgroup_auroc("structural_anomalies")
-            if include_structural
-            else None
+            subgroup_auroc("structural_anomalies") if include_structural else None
         ),
         "split_image_aurocs": {
-            split: subgroup_auroc(split)
-            for split in positive_splits
+            split: subgroup_auroc(split) for split in positive_splits
         },
         "elapsed_seconds_this_run": time.perf_counter() - run_started,
         "progress_path": str(progress_path),
         "summary_path": str(summary_path),
-        "standard_template": (
-            str(standard_file) if standard_file is not None else None
-        ),
+        "standard_template": str(standard_file) if standard_file is not None else None,
         "generic_template": str(generic_file) if generic_file is not None else None,
         "failures": [
-            {"image": record["image"], "error": record["error"]}
-            for record in failures
+            {"image": record["image"], "error": record["error"]} for record in failures
         ],
     }
     summary_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     return summary
 
@@ -776,13 +926,13 @@ def evaluate_screw_bag(
     clip_checkpoint: str | Path,
     clip_threshold: float = 0.35,
     device: str = "cuda",
-    mask_dedup_iou: float = 0.80,
+    mask_dedup_iou: float = 0.8,
     mask_dedup_containment: float = 0.85,
-    mask_min_area: int = 16,
-    mask_cleanup: bool = True,
     mask_dedup: bool = True,
     rule_inference_enabled: bool = True,
+    rule_memory_schedule: str = RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
     patch_enabled: bool = False,
+    patch_feature_mode: str = PATCH_FEATURE_GLOBAL,
     patch_bank_path: str | Path | None = None,
     patch_dinov2_checkpoint: str | Path = DEFAULT_PATCH_DINOV2_CHECKPOINT,
     patch_query_batch_size: int = 256,
@@ -795,9 +945,10 @@ def evaluate_screw_bag(
     restart: bool = False,
     test_split: str | None = None,
     test_splits: Sequence[str] | None = None,
+    sam3_cache_root: str | Path | None = None,
+    sam3_cache_mode: str = "off",
 ) -> dict[str, Any]:
     """Backward-compatible wrapper for the original evaluation entry point."""
-
     return evaluate_dataset(
         class_name="screw_bag",
         dataset_root=dataset_root,
@@ -814,11 +965,11 @@ def evaluate_screw_bag(
         sam3_prompt=sam3_prompt,
         mask_dedup_iou=mask_dedup_iou,
         mask_dedup_containment=mask_dedup_containment,
-        mask_min_area=mask_min_area,
-        mask_cleanup=mask_cleanup,
         mask_dedup=mask_dedup,
         rule_inference_enabled=rule_inference_enabled,
+        rule_memory_schedule=rule_memory_schedule,
         patch_enabled=patch_enabled,
+        patch_feature_mode=patch_feature_mode,
         patch_bank_path=patch_bank_path,
         patch_dinov2_checkpoint=patch_dinov2_checkpoint,
         patch_query_batch_size=patch_query_batch_size,
@@ -830,4 +981,6 @@ def evaluate_screw_bag(
         restart=restart,
         test_split=test_split,
         test_splits=test_splits,
+        sam3_cache_root=sam3_cache_root,
+        sam3_cache_mode=sam3_cache_mode,
     )

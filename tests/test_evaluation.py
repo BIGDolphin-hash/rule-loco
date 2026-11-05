@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import contextlib
+import io
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ from unittest.mock import patch
 from pro_innovation.cli import (
     _make_patch_scorer,
     _patch_bank_path,
+    _resolve_sam3_threshold_runtime,
     _validate_runtime_branches,
     build_parser,
 )
@@ -30,6 +33,136 @@ from pro_innovation.templates import parse_template
 
 
 class EvaluationTests(unittest.TestCase):
+
+    def test_sam3_policy_ignores_standard_template_hash_only(self) -> None:
+        policy = SimpleNamespace(
+            configuration={
+                "sam3_prompt": "{category}",
+                "standard_template_sha256": "old-hash",
+            },
+            selected_thresholds={"part": 0.5},
+            source_path=Path("/tmp/policy.json"),
+        )
+        with (
+            patch(
+                "pro_innovation.cli.load_sam3_threshold_policy",
+                return_value=policy,
+            ),
+            patch("pro_innovation.cli.Path.is_file", return_value=True),
+        ):
+            thresholds, mode, _ = _resolve_sam3_threshold_runtime(
+                class_name="demo",
+                enabled=True,
+                policy_root="/tmp",
+                explicit_policy_path="/tmp/policy.json",
+                expected_configuration={
+                    "sam3_prompt": "{category}",
+                    "standard_template_sha256": "new-hash",
+                },
+                expected_categories=("part",),
+            )
+
+        self.assertEqual(thresholds, {"part": 0.5})
+        self.assertEqual(mode, "few_shot_object_specific")
+
+    def test_sam3_policy_still_rejects_category_changes(self) -> None:
+        policy = SimpleNamespace(
+            configuration={},
+            selected_thresholds={"old_part": 0.5},
+            source_path=Path("/tmp/policy.json"),
+        )
+        with (
+            patch(
+                "pro_innovation.cli.load_sam3_threshold_policy",
+                return_value=policy,
+            ),
+            patch("pro_innovation.cli.Path.is_file", return_value=True),
+        ):
+            with self.assertRaisesRegex(ValueError, "categories do not match"):
+                _resolve_sam3_threshold_runtime(
+                    class_name="demo",
+                    enabled=True,
+                    policy_root="/tmp",
+                    explicit_policy_path="/tmp/policy.json",
+                    expected_configuration={},
+                    expected_categories=("new_part",),
+                )
+
+    def test_sam3_policy_allows_uncalibrated_runtime_categories(self) -> None:
+        policy = SimpleNamespace(
+            configuration={},
+            selected_thresholds={"calibrated_part": 0.5},
+            source_path=Path("/tmp/policy.json"),
+        )
+        with (
+            patch(
+                "pro_innovation.cli.load_sam3_threshold_policy",
+                return_value=policy,
+            ),
+            patch("pro_innovation.cli.Path.is_file", return_value=True),
+        ):
+            thresholds, mode, _ = _resolve_sam3_threshold_runtime(
+                class_name="demo",
+                enabled=True,
+                policy_root="/tmp",
+                explicit_policy_path="/tmp/policy.json",
+                expected_configuration={},
+                expected_categories=("calibrated_part", "uncalibrated_part"),
+            )
+
+        self.assertEqual(thresholds, {"calibrated_part": 0.5})
+        self.assertEqual(mode, "few_shot_object_specific")
+
+    def test_only_binary_schedules_are_available_from_cli(self) -> None:
+        parser = build_parser()
+        for command in (
+            ["infer", "--image", "sample.png"],
+            ["evaluate", "--class-name", "breakfast_box"],
+            ["evaluate-screw-bag"],
+        ):
+            self.assertEqual(
+                parser.parse_args(command).rule_memory_schedule, "binary-selective"
+            )
+            for option in ("--rule-memory-schedule",):
+                for schedule in ("binary-selective", "binary-parallel"):
+                    with self.subTest(
+                        command=command, option=option, schedule=schedule
+                    ):
+                        self.assertEqual(
+                            parser.parse_args(
+                                command + [option, schedule]
+                            ).rule_memory_schedule,
+                            schedule,
+                        )
+                for schedule in ("selective", "parallel"):
+                    with self.subTest(
+                        command=command, option=option, schedule=schedule
+                    ):
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            with self.assertRaises(SystemExit):
+                                parser.parse_args(command + [option, schedule])
+
+    def test_removed_memory_commands_and_runtime_options_are_rejected(self):
+        parser = build_parser()
+        commands = [
+            ["build-category-patch-memory"],
+            ["build-composition-memory"],
+            ["infer", "--image", "sample.png", "--composition-matching"],
+            ["infer", "--image", "sample.png", "--category-patch-bank", "old.npz"],
+            ["infer", "--image", "sample.png", "--patch-feature-mode", "category"],
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        parser.parse_args(command)
+        self.assertEqual(
+            parser.parse_args(["infer", "--image", "sample.png"]).patch_feature_mode,
+            "global",
+        )
+        with self.assertRaisesRegex(ValueError, "only global Patch"):
+            build_run_stem("demo", patch_feature_mode="category")
+
     def test_sam3_runtime_defaults_are_point_four(self) -> None:
         parser = build_parser()
         commands = (
@@ -105,12 +238,15 @@ class EvaluationTests(unittest.TestCase):
                     standard_path=root / "missing.standard.rules",
                     result_root=root / "result",
                     sam3_threshold=0.7,
+                    sam3_category_thresholds={"demo": 0.75},
+                    sam3_threshold_policy_path="/tmp/demo-policy.json",
                     sam3_repo="/missing/sam3",
                     sam3_checkpoint="/missing/sam3.pt",
                     clip_repo="/missing/clip",
                     clip_checkpoint="/missing/clip.pt",
                     rule_inference_enabled=False,
                     patch_enabled=True,
+                    patch_feature_mode="global",
                     patch_bank_path=root / "patch.npz",
                     test_splits=("good", "structural_anomalies"),
                     restart=True,
@@ -120,7 +256,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(summary["rule_inference_enabled"])
         self.assertEqual(summary["score_fusion_policy"], "patch_only_no_fusion")
         self.assertEqual(summary["sam3_threshold_policy"], "disabled")
-        self.assertIsNone(summary["mask_cleanup_enabled"])
+        self.assertIsNone(summary["mask_dedup_enabled"])
         self.assertIsNone(summary["standard_template"])
         self.assertIsNone(summary["generic_template"])
         self.assertEqual(summary["valid_score_count"], 2)
@@ -183,6 +319,7 @@ class EvaluationTests(unittest.TestCase):
                     clip_checkpoint="/missing/clip.pt",
                     rule_inference_enabled=False,
                     patch_enabled=True,
+                    patch_feature_mode="global",
                     patch_bank_path=root / "patch.npz",
                     restart=True,
                 )
@@ -207,54 +344,36 @@ class EvaluationTests(unittest.TestCase):
         tolerance = infer_length_tolerance_percent(rules)
         self.assertAlmostEqual(tolerance or 0.0, 3.0)
         self.assertEqual(
-            build_run_stem("screw_bag", 0.70, tolerance),
+            build_run_stem("screw_bag"),
             "screw_bag_rules_good-logical",
         )
 
     def test_auroc_handles_tied_scores(self) -> None:
         self.assertEqual(binary_auroc([0, 1], [0.5, 0.5]), 0.5)
 
-    def test_run_name_records_disabled_mask_operations(self) -> None:
-        self.assertEqual(
-            build_run_stem(
-                "screw_bag",
-                0.70,
-                5.0,
-                mask_cleanup=False,
-                mask_dedup=False,
-            ),
-            "screw_bag_rules_good-logical",
-        )
-
     def test_patch_run_name_records_fixed_logsad_configuration(self) -> None:
         self.assertEqual(
             build_run_stem(
                 "screw_bag",
-                0.70,
-                5.0,
                 patch_enabled=True,
             ),
-            "screw_bag_dino_b6b12b18b24_good-logical",
+            "screw_bag_dino_full_coreset05_b6b12b18b24_good-logical",
         )
 
     def test_patch_only_run_name_is_isolated(self) -> None:
         self.assertEqual(
             build_run_stem(
                 "screw_bag",
-                0.70,
-                None,
                 rule_inference_enabled=False,
                 patch_enabled=True,
             ),
-            "screw_bag_dino_b6b12b18b24_patchonly_good-logical",
+            "screw_bag_dino_full_coreset05_b6b12b18b24_patchonly_good-logical",
         )
 
     def test_full_test_scope_gets_distinct_run_name(self) -> None:
         self.assertEqual(
             build_run_stem(
                 "screw_bag",
-                0.70,
-                5.0,
                 include_structural_anomalies=True,
             ),
             "screw_bag_rules_good-logical-structural",
@@ -268,12 +387,7 @@ class EvaluationTests(unittest.TestCase):
         measurement_tag = infer_measurement_tag(rules)
         self.assertEqual(measurement_tag, "area5")
         self.assertEqual(
-            build_run_stem(
-                "juice_bottle",
-                0.70,
-                None,
-                measurement_tag=measurement_tag,
-            ),
+            build_run_stem("juice_bottle"),
             "juice_bottle_rules_good-logical",
         )
 
@@ -315,9 +429,7 @@ class EvaluationTests(unittest.TestCase):
             },
         )
 
-        with self.assertRaisesRegex(
-            ValueError, "standard template values missing"
-        ):
+        with self.assertRaisesRegex(ValueError, "standard template values missing"):
             validate_attribute_vocabulary(
                 rules,
                 {
@@ -381,7 +493,8 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(args.standard)
         self.assertEqual(args.mask_dedup_iou, 0.80)
         self.assertEqual(args.mask_dedup_containment, 0.85)
-        self.assertEqual(args.mask_min_area, 16)
+        self.assertTrue(args.mask_dedup)
+        self.assertFalse(hasattr(args, "mask_min_area"))
         self.assertEqual(args.sam3_threshold, 0.40)
         self.assertFalse(hasattr(args, "clip_verification"))
         self.assertEqual(args.clip_threshold, 0.35)
@@ -409,7 +522,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(args.dataset_base)
         self.assertIsNone(args.dataset_root)
 
-    def test_default_patch_bank_path_is_grouped_by_shot_and_dataset(self) -> None:
+    def test_default_patch_bank_path_uses_texture_root_and_dataset(self) -> None:
         parser = build_parser()
         cases = (
             ("mvtec_loco", "screw_bag"),
@@ -422,11 +535,40 @@ class EvaluationTests(unittest.TestCase):
                     ["evaluate", "--dataset", dataset, "--class-name", class_name]
                 )
                 expected = (
-                    Path("/home/lxq/pro-innovation/memory_banks/4-shot")
+                    Path("memory_banks/Global patch/full")
                     / dataset
-                    / f"{class_name}.dino_b6b12b18b24.npz"
+                    / "global"
+                    / f"{class_name}.dino_full_coreset05_b6b12b18b24.npz"
                 )
                 self.assertEqual(_patch_bank_path(args, class_name), expected)
+
+    def test_patch_run_name_distinguishes_one_percent_bank(self) -> None:
+        self.assertEqual(
+            build_run_stem(
+                "pushpins",
+                patch_enabled=True,
+                patch_feature_mode="global",
+                patch_coreset_ratio=0.01,
+            ),
+            "pushpins_dino_full_coreset01_b6b12b18b24_good-logical",
+        )
+
+    def test_memory_builders_default_to_type_scope_dataset_directories(self) -> None:
+        parser = build_parser()
+        patch_args = parser.parse_args(
+            [
+                "build-patch-memory",
+                "--class-name",
+                "screw_bag",
+                "--normal-dir",
+                "/data/screw_bag/train/good",
+            ]
+        )
+        self.assertEqual(
+            patch_args.patch_bank_root,
+            "memory_banks/Global patch/full/mvtec_loco/global",
+        )
+        self.assertEqual(patch_args.patch_coreset_ratio, 0.05)
 
     def test_visa_uses_only_official_test_rows_and_jpg_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -480,7 +622,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(patch_only.rule_inference)
         _validate_runtime_branches(patch_only)
 
-    def test_disabled_rules_require_patch(self) -> None:
+    def test_disabled_rules_require_an_enabled_anomaly_branch(self) -> None:
         parser = build_parser()
         no_branch = parser.parse_args(
             ["evaluate", "--class-name", "screw_bag", "--no-rule-inference"]
@@ -490,9 +632,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_patch_matching_is_default_off_and_switchable(self) -> None:
         parser = build_parser()
-        disabled = parser.parse_args(
-            ["evaluate", "--class-name", "screw_bag"]
-        )
+        disabled = parser.parse_args(["evaluate", "--class-name", "screw_bag"])
         enabled = parser.parse_args(
             [
                 "evaluate",
@@ -512,25 +652,24 @@ class EvaluationTests(unittest.TestCase):
             _make_patch_scorer(Namespace(patch_matching=False), class_name="demo")
         )
 
-    def test_build_patch_memory_keeps_all_layers_and_uses_full_images(self) -> None:
+    def test_build_patch_memory_accepts_a_full_normal_directory_and_coreset(
+        self,
+    ) -> None:
         args = build_parser().parse_args(
             [
                 "build-patch-memory",
                 "--class-name",
                 "screw_bag",
-                "--normal-images",
-                "a.png",
-                "b.png",
-                "c.png",
-                "d.png",
-                "--calibration-dir",
-                "validation/good",
+                "--normal-dir",
+                "train/good",
             ]
         )
-        self.assertEqual(len(args.normal_images), 4)
-        self.assertEqual(args.calibration_dir, "validation/good")
+        self.assertIsNone(args.normal_images)
+        self.assertEqual(args.normal_dir, "train/good")
         self.assertEqual(args.patch_query_batch_size, 256)
         self.assertEqual(args.patch_extraction_batch_size, 4)
+        self.assertEqual(args.patch_coreset_ratio, 0.05)
+        self.assertEqual(args.patch_coreset_seed, 0)
         self.assertFalse(hasattr(args, "patch_threshold_margin"))
         self.assertFalse(hasattr(args, "patch_position_radius"))
         self.assertFalse(hasattr(args, "patch_fusion_quantile"))
@@ -551,12 +690,10 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue(args.all_test_splits)
 
     def test_generic_evaluate_all_splits_flag_is_on_by_default(self) -> None:
-        args = build_parser().parse_args(
-            ["evaluate", "--class-name", "screw_bag"]
-        )
+        args = build_parser().parse_args(["evaluate", "--class-name", "screw_bag"])
         self.assertTrue(args.all_test_splits)
 
-    def test_calibrate_sam3_command_fixes_proposal_threshold_at_0_10(self) -> None:
+    def test_calibrate_sam3_command_defaults_proposal_threshold_to_0_20(self) -> None:
         args = build_parser().parse_args(
             [
                 "calibrate-sam3-thresholds",
@@ -570,8 +707,83 @@ class EvaluationTests(unittest.TestCase):
             ]
         )
         self.assertEqual(len(args.normal_images), 4)
-        self.assertEqual(args.sam3_threshold, 0.10)
+        self.assertEqual(args.sam3_threshold, 0.20)
+        self.assertTrue(args.mask_dedup)
+        self.assertEqual(
+            args.threshold_selection_method,
+            "confidence_gap_midpoint",
+        )
         self.assertIsNone(args.truth_templates)
+        self.assertEqual(
+            args.sam3_threshold_policy_root,
+            "config/sam3_thresholds",
+        )
+        self.assertEqual(
+            args.calibration_result_root,
+            "results/sam3_threshold_calibration",
+        )
+        self.assertFalse(args.overwrite)
+
+    def test_calibrate_sam3_accepts_explicit_overwrite_flag(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "calibrate-sam3-thresholds",
+                "--class-name",
+                "juice_bottle",
+                "--normal-dir",
+                "/data/juice_bottle/train/good",
+                "--overwrite",
+            ]
+        )
+        self.assertTrue(args.overwrite)
+
+    def test_calibrate_sam3_accepts_legacy_threshold_selection_method(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "calibrate-sam3-thresholds",
+                "--class-name",
+                "juice_bottle",
+                "--normal-dir",
+                "/data/juice_bottle/train/good",
+                "--threshold-selection-method",
+                "confidence_gap_midpoint",
+            ]
+        )
+        self.assertEqual(
+            args.threshold_selection_method,
+            "confidence_gap_midpoint",
+        )
+
+    def test_calibrate_sam3_rejects_removed_threshold_selection_method(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                [
+                    "calibrate-sam3-thresholds",
+                    "--class-name",
+                    "juice_bottle",
+                    "--normal-dir",
+                    "/data/juice_bottle/train/good",
+                    "--threshold-selection-method",
+                    "per_image_count_boundary_minimum",
+                ]
+            )
+
+    def test_cache_sam3_command_defaults_proposal_threshold_to_0_20(self) -> None:
+        args = build_parser().parse_args(["cache-sam3", "--class-name", "pushpins"])
+        self.assertEqual(args.sam3_threshold, 0.20)
+
+    def test_calibrate_sam3_accepts_full_normal_directory(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "calibrate-sam3-thresholds",
+                "--class-name",
+                "juice_bottle",
+                "--normal-dir",
+                "/data/juice_bottle/train/good",
+            ]
+        )
+        self.assertEqual(args.normal_dir, "/data/juice_bottle/train/good")
+        self.assertIsNone(args.normal_images)
 
     def test_object_sam3_threshold_policy_can_be_disabled_for_ablation(self) -> None:
         args = build_parser().parse_args(
@@ -583,6 +795,7 @@ class EvaluationTests(unittest.TestCase):
             ]
         )
         self.assertFalse(args.object_sam3_thresholds)
+
 
 if __name__ == "__main__":
     unittest.main()

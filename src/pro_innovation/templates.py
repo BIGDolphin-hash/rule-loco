@@ -347,13 +347,8 @@ def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
             raise TemplateError(
                 f"{rule_id}: SPATIAL_COMBINATION requires PROPERTY=spatial.<name>"
             )
-        if not object_name:
+        if not object_name and property_name != "spatial.self_symmetry":
             raise TemplateError(f"{rule_id}: SPATIAL_COMBINATION requires OBJECT")
-    if task is TaskType.ATTRIBUTE_ERROR and not property_name.startswith("attribute."):
-        raise TemplateError(
-            f"{rule_id}: ATTRIBUTE_ERROR requires PROPERTY=attribute.<name>"
-        )
-
     return Rule(
         rule_id=rule_id,
         task=task,

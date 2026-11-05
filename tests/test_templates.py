@@ -18,16 +18,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TemplateTests(unittest.TestCase):
-    def test_six_task_example_round_trip(self) -> None:
+    def test_five_task_example_round_trip(self) -> None:
         text = (ROOT / "examples" / "standard.rules").read_text(encoding="utf-8")
         standard = parse_template(text)
-        self.assertEqual(len(standard), 6)
+        self.assertEqual(len(standard), 5)
         generic = to_generic_template(standard)
         reparsed = parse_template(
             serialize_template(generic), allow_missing_values=True
         )
         self.assertEqual(generic, reparsed)
         self.assertEqual(collect_categories(generic), ("part_a", "part_b"))
+
+    def test_removed_attribute_error_task_is_rejected(self) -> None:
+        text = (
+            "[C001] TASK=ATTRIBUTE_ERROR | SUBJECT=part_a | "
+            "PROPERTY=attribute.color | OP=EQ | VALUE=red"
+        )
+        with self.assertRaisesRegex(TemplateError, "unsupported TASK=ATTRIBUTE_ERROR"):
+            parse_template(text)
 
     def test_attribute_indexes_must_be_contiguous(self) -> None:
         text = (
@@ -97,10 +105,10 @@ class TemplateTests(unittest.TestCase):
         text = (
             "[C001] TASK=SPATIAL_COMBINATION | SUBJECT=pattern_label | "
             "PROPERTY=spatial.position | OBJECT=juice_bottle | "
-            "OP=EQ | VALUE=middle"
+            "OP=EQ | VALUE=at_middle"
         )
         standard = parse_template(text)
-        self.assertEqual(standard[0].expected, "middle")
+        self.assertEqual(standard[0].expected, "at_middle")
         self.assertEqual(serialize_template(standard), text)
 
     def test_spatial_relation_count_round_trip(self) -> None:
@@ -123,6 +131,24 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(
             generic,
             parse_template(serialized_generic, allow_missing_values=True),
+        )
+
+    def test_self_symmetry_spatial_rule_does_not_require_object(self) -> None:
+        text = (
+            "[C001] TASK=SPATIAL_COMBINATION | SUBJECT=part | "
+            "PROPERTY=spatial.self_symmetry | OP=EQ | "
+            "VALUE=self_left_right_symmetric"
+        )
+        standard = parse_template(text)
+        self.assertIsNone(standard[0].object)
+        self.assertEqual(serialize_template(standard), text)
+        generic = to_generic_template(standard)
+        self.assertEqual(
+            generic,
+            parse_template(
+                serialize_template(generic),
+                allow_missing_values=True,
+            ),
         )
 
     def test_spatial_relation_count_at_least_round_trip(self) -> None:

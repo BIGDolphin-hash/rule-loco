@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import exp, hypot
 from typing import Sequence
 
 import numpy as np
@@ -11,21 +10,61 @@ import numpy as np
 from .errors import ExecutionError
 from .models import MaskInstance
 
+SELF_SYMMETRY_THRESHOLD = 0.80
+
 
 @dataclass(frozen=True)
 class SpatialConfig:
     containment_threshold: float = 0.95
-    near_diagonal_fraction: float = 0.15
-    far_diagonal_fraction: float = 0.50
-    direction_transition_fraction: float = 0.05
-    distance_transition_fraction: float = 0.05
-    containment_transition: float = 0.05
     middle_min_fraction: float = 0.40
     middle_max_fraction: float = 0.60
+    left_max_fraction: float = 0.30
+    right_min_fraction: float = 0.70
+    top_max_fraction: float = 0.30
     lower_min_fraction: float = 0.70
-    center_x_tolerance_fraction: float = 0.07
-    center_y_tolerance_fraction: float = 0.07
-    position_transition_fraction: float = 0.05
+    center_x_tolerance_fraction: float = 0.08
+    center_y_tolerance_fraction: float = 0.08
+
+
+@dataclass(frozen=True)
+class _MaskGeometry:
+    """Reusable exact geometry derived from one binary instance mask."""
+
+    shape: tuple[int, ...]
+    rows: np.ndarray
+    columns: np.ndarray
+    bounds: tuple[float, float, float, float]
+
+
+def _mask_geometry(mask: np.ndarray) -> _MaskGeometry:
+    prepared = np.asarray(mask, dtype=bool)
+    rows, columns = np.nonzero(prepared)
+    bounds = (
+        float(columns.min()),
+        float(rows.min()),
+        float(columns.max() + 1),
+        float(rows.max() + 1),
+    )
+    return _MaskGeometry(prepared.shape, rows, columns, bounds)
+
+
+def _geometry_containment_fraction(
+    inner: _MaskGeometry,
+    container: _MaskGeometry,
+) -> float:
+    if inner.shape != container.shape:
+        raise ExecutionError(
+            "spatial masks must share a shape, "
+            f"got {inner.shape} and {container.shape}"
+        )
+    left, top, right, bottom = container.bounds
+    inside = (
+        (inner.columns >= left)
+        & (inner.columns < right)
+        & (inner.rows >= top)
+        & (inner.rows < bottom)
+    )
+    return float(np.count_nonzero(inside) / max(len(inner.rows), 1))
 
 
 def _center(mask: np.ndarray) -> tuple[float, float]:
@@ -71,16 +110,10 @@ def position_containment_fraction(
     coordinate frame; its bounds are treated as a filled spatial region.
     """
 
-    _same_shape(inner, container)
-    rows, columns = np.nonzero(inner)
-    left, top, right, bottom = _bounds(container)
-    inside = (
-        (columns >= left)
-        & (columns < right)
-        & (rows >= top)
-        & (rows < bottom)
+    return _geometry_containment_fraction(
+        _mask_geometry(inner),
+        _mask_geometry(container),
     )
-    return float(np.count_nonzero(inside) / max(len(rows), 1))
 
 
 def _relative_center_in_object_frame(
@@ -116,14 +149,22 @@ def _relative_center_in_object_frame(
     return float(relative[0]), float(relative[1])
 
 
-def _dilate_8(mask: np.ndarray) -> np.ndarray:
-    padded = np.pad(mask, 1, mode="constant", constant_values=False)
-    result = np.zeros_like(mask, dtype=bool)
-    height, width = mask.shape
-    for dy in range(3):
-        for dx in range(3):
-            result |= padded[dy : dy + height, dx : dx + width]
-    return result
+def _self_symmetry_score(mask: np.ndarray, relation: str) -> float:
+    """Return Dice overlap with the mask mirrored inside its own bounds."""
+
+    rows, columns = np.nonzero(mask)
+    top, bottom = int(rows.min()), int(rows.max()) + 1
+    left, right = int(columns.min()), int(columns.max()) + 1
+    cropped = mask[top:bottom, left:right]
+    if relation == "self_left_right_symmetric":
+        mirrored = np.fliplr(cropped)
+    elif relation == "self_top_bottom_symmetric":
+        mirrored = np.flipud(cropped)
+    else:
+        raise ExecutionError(f"unsupported self-symmetry relation: {relation}")
+    intersection = int(np.count_nonzero(cropped & mirrored))
+    total = int(np.count_nonzero(cropped)) + int(np.count_nonzero(mirrored))
+    return float(2.0 * intersection / max(total, 1))
 
 
 def _canonical_relation(relation: str) -> str:
@@ -132,24 +173,32 @@ def _canonical_relation(relation: str) -> str:
         "right": "right_of",
         "top": "above",
         "bottom": "below",
-        "contact": "touching",
+        "upper_left": "upper_left_of",
+        "top_left": "upper_left_of",
+        "upper_right": "upper_right_of",
+        "top_right": "upper_right_of",
+        "lower_left": "lower_left_of",
+        "bottom_left": "lower_left_of",
+        "lower_right": "lower_right_of",
+        "bottom_right": "lower_right_of",
+        "left_right_symmetric": "self_left_right_symmetric",
+        "top_bottom_symmetric": "self_top_bottom_symmetric",
         "contain": "contains",
-        "centered": "center",
-        "middle_region_of": "middle",
-        "lower_region_of": "lower",
-        "centered_in": "center",
+        "middle": "at_middle",
+        "lower": "at_lower",
+        "center": "at_center",
+        "centered": "at_center",
+        "left_region_of": "at_left",
+        "right_region_of": "at_right",
+        "top_region_of": "at_top",
+        "middle_region_of": "at_middle",
+        "lower_region_of": "at_lower",
+        "centered_in": "at_center",
     }
-    lowered = relation.lower()
+    lowered = relation.strip().lower().replace("-", "_").replace(" ", "_")
     if lowered.startswith("spatial."):
         lowered = lowered.split(".", 1)[1]
     return aliases.get(lowered, lowered)
-
-
-def _sigmoid(value: float) -> float:
-    if value >= 0.0:
-        return 1.0 / (1.0 + exp(-value))
-    exponential = exp(value)
-    return exponential / (1.0 + exponential)
 
 
 def _evaluate_pair(
@@ -161,39 +210,7 @@ def _evaluate_pair(
     left = subject.mask
     right = object_.mask
     _same_shape(left, right)
-    subject_center = _center(left)
-    object_center = _center(right)
     relation = _canonical_relation(relation)
-
-    if relation == "left_of":
-        return subject_center[0] < object_center[0]
-    if relation == "right_of":
-        return subject_center[0] > object_center[0]
-    if relation == "above":
-        return subject_center[1] < object_center[1]
-    if relation == "below":
-        return subject_center[1] > object_center[1]
-
-    if relation == "middle":
-        relative_x, relative_y = _relative_center_in_object_frame(left, right)
-        return (
-            config.middle_min_fraction
-            <= relative_x
-            <= config.middle_max_fraction
-            and config.middle_min_fraction
-            <= relative_y
-            <= config.middle_max_fraction
-        )
-
-    relative_x, relative_y = _relative_center(left, right)
-    if relation == "lower":
-        return relative_y >= config.lower_min_fraction
-    if relation == "center":
-        return (
-            abs(relative_x - 0.5) <= config.center_x_tolerance_fraction
-            and abs(relative_y - 0.5) <= config.center_y_tolerance_fraction
-        )
-
     if relation == "inside":
         return (
             position_containment_fraction(left, right)
@@ -205,126 +222,64 @@ def _evaluate_pair(
             >= config.containment_threshold
         )
 
-    intersection = int(np.count_nonzero(left & right))
-    if relation == "overlap":
-        return intersection > 0
-    if relation == "disjoint":
-        return intersection == 0
-    if relation == "touching":
-        return bool(np.any(_dilate_8(left) & right))
-    distance = hypot(
-        subject_center[0] - object_center[0],
-        subject_center[1] - object_center[1],
-    )
-    diagonal = hypot(left.shape[0], left.shape[1])
-    normalized_distance = distance / max(diagonal, 1.0)
-    if relation == "near":
-        return normalized_distance <= config.near_diagonal_fraction
-    if relation == "far":
-        return normalized_distance >= config.far_diagonal_fraction
-    raise ExecutionError(f"unsupported spatial relation: {relation}")
-
-
-def _pair_relation_support(
-    subject: MaskInstance,
-    object_: MaskInstance,
-    relation: str,
-    config: SpatialConfig,
-) -> float:
-    """Return continuous support for one geometric relation predicate."""
-
-    left = subject.mask
-    right = object_.mask
-    _same_shape(left, right)
     subject_center = _center(left)
     object_center = _center(right)
-    relation = _canonical_relation(relation)
-    diagonal = max(hypot(left.shape[0], left.shape[1]), 1.0)
 
-    if relation in {"left_of", "right_of", "above", "below"}:
-        signed_difference = {
-            "left_of": object_center[0] - subject_center[0],
-            "right_of": subject_center[0] - object_center[0],
-            "above": object_center[1] - subject_center[1],
-            "below": subject_center[1] - object_center[1],
-        }[relation]
-        scale = max(config.direction_transition_fraction, 1e-6)
-        return _sigmoid((signed_difference / diagonal) / scale)
+    if relation == "left_of":
+        return subject_center[0] < object_center[0]
+    if relation == "right_of":
+        return subject_center[0] > object_center[0]
+    if relation == "above":
+        return subject_center[1] < object_center[1]
+    if relation == "below":
+        return subject_center[1] > object_center[1]
+    if relation == "upper_left_of":
+        return (
+            subject_center[0] < object_center[0]
+            and subject_center[1] < object_center[1]
+        )
+    if relation == "upper_right_of":
+        return (
+            subject_center[0] > object_center[0]
+            and subject_center[1] < object_center[1]
+        )
+    if relation == "lower_left_of":
+        return (
+            subject_center[0] < object_center[0]
+            and subject_center[1] > object_center[1]
+        )
+    if relation == "lower_right_of":
+        return (
+            subject_center[0] > object_center[0]
+            and subject_center[1] > object_center[1]
+        )
 
-    position_scale = max(config.position_transition_fraction, 1e-6)
-    if relation == "middle":
+    if relation == "at_middle":
         relative_x, relative_y = _relative_center_in_object_frame(left, right)
-        after_left = _sigmoid(
-            (relative_x - config.middle_min_fraction) / position_scale
+        return (
+            config.middle_min_fraction
+            <= relative_x
+            <= config.middle_max_fraction
+            and config.middle_min_fraction
+            <= relative_y
+            <= config.middle_max_fraction
         )
-        before_right = _sigmoid(
-            (config.middle_max_fraction - relative_x) / position_scale
-        )
-        after_top = _sigmoid(
-            (relative_y - config.middle_min_fraction) / position_scale
-        )
-        before_bottom = _sigmoid(
-            (config.middle_max_fraction - relative_y) / position_scale
-        )
-        return min(after_left, before_right, after_top, before_bottom)
 
     relative_x, relative_y = _relative_center(left, right)
-    if relation == "lower":
-        return _sigmoid(
-            (relative_y - config.lower_min_fraction) / position_scale
-        )
-    if relation == "center":
-        horizontal = _sigmoid(
-            (
-                config.center_x_tolerance_fraction
-                - abs(relative_x - 0.5)
-            )
-            / position_scale
-        )
-        vertical = _sigmoid(
-            (
-                config.center_y_tolerance_fraction
-                - abs(relative_y - 0.5)
-            )
-            / position_scale
-        )
-        return min(horizontal, vertical)
-
-    if relation in {"inside", "contains"}:
-        contained_fraction = (
-            position_containment_fraction(left, right)
-            if relation == "inside"
-            else position_containment_fraction(right, left)
-        )
-        scale = max(config.containment_transition, 1e-6)
-        return _sigmoid(
-            (contained_fraction - config.containment_threshold) / scale
+    if relation == "at_left":
+        return relative_x <= config.left_max_fraction
+    if relation == "at_right":
+        return relative_x >= config.right_min_fraction
+    if relation == "at_top":
+        return relative_y <= config.top_max_fraction
+    if relation == "at_lower":
+        return relative_y >= config.lower_min_fraction
+    if relation == "at_center":
+        return (
+            abs(relative_x - 0.5) <= config.center_x_tolerance_fraction
+            and abs(relative_y - 0.5) <= config.center_y_tolerance_fraction
         )
 
-    intersection = int(np.count_nonzero(left & right))
-    left_area = int(np.count_nonzero(left))
-    right_area = int(np.count_nonzero(right))
-    overlap_fraction = intersection / max(min(left_area, right_area), 1)
-    overlap_support = (
-        0.0 if intersection == 0 else 0.5 + 0.5 * overlap_fraction
-    )
-    if relation == "overlap":
-        return overlap_support
-    if relation == "disjoint":
-        return 1.0 - overlap_support
-    if relation == "touching":
-        return float(bool(np.any(_dilate_8(left) & right)))
-
-    distance = hypot(
-        subject_center[0] - object_center[0],
-        subject_center[1] - object_center[1],
-    )
-    normalized_distance = distance / diagonal
-    scale = max(config.distance_transition_fraction, 1e-6)
-    if relation == "near":
-        return _sigmoid((config.near_diagonal_fraction - normalized_distance) / scale)
-    if relation == "far":
-        return _sigmoid((normalized_distance - config.far_diagonal_fraction) / scale)
     raise ExecutionError(f"unsupported spatial relation: {relation}")
 
 
@@ -358,53 +313,19 @@ def evaluate_spatial_relation_by_subject(
 
     relation = _canonical_relation(relation)
     settings = config or SpatialConfig()
+    if relation in {
+        "self_left_right_symmetric",
+        "self_top_bottom_symmetric",
+    }:
+        return tuple(
+            _self_symmetry_score(subject.mask, relation)
+            >= SELF_SYMMETRY_THRESHOLD
+            for subject in subjects
+        )
     return tuple(
         any(
             _evaluate_pair(subject, object_, relation, settings)
             for object_ in objects
-        )
-        for subject in subjects
-    )
-
-
-def score_spatial_relation(
-    subjects: Sequence[MaskInstance],
-    objects: Sequence[MaskInstance],
-    relation: str,
-    *,
-    config: SpatialConfig | None = None,
-) -> float:
-    """Return max-pair support for the V1 existential relation semantics."""
-
-    supports = score_spatial_relation_by_subject(
-        subjects,
-        objects,
-        relation,
-        config=config,
-    )
-    return max(supports, default=0.0)
-
-
-def score_spatial_relation_by_subject(
-    subjects: Sequence[MaskInstance],
-    objects: Sequence[MaskInstance],
-    relation: str,
-    *,
-    config: SpatialConfig | None = None,
-) -> tuple[float, ...]:
-    """Return strongest matching-object support for every subject instance."""
-
-    relation = _canonical_relation(relation)
-    settings = config or SpatialConfig()
-    return tuple(
-        max(
-            (
-                subject.score
-                * object_.score
-                * _pair_relation_support(subject, object_, relation, settings)
-                for object_ in objects
-            ),
-            default=0.0,
         )
         for subject in subjects
     )

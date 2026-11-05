@@ -11,11 +11,12 @@ from pro_innovation.adapters.sam3 import Sam3Segmenter
 from pro_innovation.models import MaskInstance
 from pro_innovation.sam3_calibration import (
     CALIBRATION_PROPOSAL_THRESHOLD,
-    CALIBRATION_SCHEMA,
+    CONFIDENCE_GAP_MIDPOINT_SELECTION,
     calibrate_sam3_thresholds,
     extract_exact_count_truth,
     floor_sam3_threshold,
     load_sam3_threshold_policy,
+    save_sam3_threshold_calibration_result,
     save_sam3_threshold_policy,
 )
 from pro_innovation.templates import parse_template
@@ -54,6 +55,26 @@ class _IdentityProcessor:
 
 
 class Sam3CalibrationTests(unittest.TestCase):
+    def test_all_supplied_normal_images_participate_in_calibration(self) -> None:
+        images = ("a", "b", "c", "d", "e")
+        result = calibrate_sam3_thresholds(
+            class_name="demo",
+            normal_images=images,
+            truth_rules_by_image=tuple(_truth(1) for _ in images),
+            segmenter=_FakeSegmenter(
+                {image: [0.90, 0.60] for image in images}
+            ),
+            mask_processor=_IdentityProcessor(),
+        )
+
+        self.assertEqual(result["calibration_scope"], "all_train_good")
+        self.assertEqual(result["calibration_samples"], 5)
+        self.assertEqual(result["multi_value_count_policy"], "maximum")
+        self.assertEqual(
+            len(result["calibrations"]["part"]["samples"]),
+            5,
+        )
+
     def test_truth_count_is_read_per_sample_instead_of_hardcoded(self) -> None:
         images = ("a", "b", "c", "d")
         result = calibrate_sam3_thresholds(
@@ -62,10 +83,10 @@ class Sam3CalibrationTests(unittest.TestCase):
             truth_rules_by_image=(_truth(1), _truth(2), _truth(3), _truth(1)),
             segmenter=_FakeSegmenter(
                 {
-                    "a": [0.90, 0.70],
-                    "b": [0.92, 0.85, 0.68],
-                    "c": [0.95, 0.89, 0.83, 0.66],
-                    "d": [0.91, 0.69],
+                    "a": [0.90, 0.60],
+                    "b": [0.92, 0.85, 0.58],
+                    "c": [0.95, 0.89, 0.83, 0.56],
+                    "d": [0.91, 0.59],
                 }
             ),
             mask_processor=_IdentityProcessor(),
@@ -76,13 +97,13 @@ class Sam3CalibrationTests(unittest.TestCase):
         self.assertEqual([sample["true_count"] for sample in samples], [1, 2, 3, 1])
         selected = result["selected_thresholds"]["part"]
         self.assertEqual(selected, 0.70)
-        self.assertGreater(
-            result["calibrations"]["part"]["raw_selected_threshold"],
-            selected,
+        self.assertEqual(
+            [sample["count_at_selected_threshold"] for sample in samples],
+            [1, 2, 3, 1],
         )
         self.assertFalse(result["model_parameters_updated"])
 
-    def test_selected_threshold_is_floored_to_0_10_grid(self) -> None:
+    def test_legacy_floor_helper_still_uses_0_10_grid(self) -> None:
         self.assertEqual(floor_sam3_threshold(0.719845), 0.70)
         self.assertEqual(floor_sam3_threshold(0.700000), 0.70)
         self.assertEqual(floor_sam3_threshold(0.6999999999999999), 0.70)
@@ -90,7 +111,7 @@ class Sam3CalibrationTests(unittest.TestCase):
         self.assertEqual(floor_sam3_threshold(0.612345), 0.60)
         self.assertEqual(floor_sam3_threshold(0.392345), 0.30)
 
-    def test_missing_extra_candidate_uses_0_10_as_conservative_bound(self) -> None:
+    def test_default_method_is_confidence_gap_midpoint(self) -> None:
         result = calibrate_sam3_thresholds(
             class_name="demo",
             normal_images=("a", "b", "c", "d"),
@@ -101,43 +122,75 @@ class Sam3CalibrationTests(unittest.TestCase):
             mask_processor=_IdentityProcessor(),
         )
         entry = result["calibrations"]["part"]
-        self.assertEqual(entry["lower_bound_q95_extra"], 0.10)
-        self.assertTrue(
-            all(
-                sample["extra_score_upper_bound"] == 0.10
-                for sample in entry["samples"]
-            )
+        self.assertEqual(entry["selected_threshold"], 0.50)
+        self.assertEqual(
+            result["threshold_selection"],
+            CONFIDENCE_GAP_MIDPOINT_SELECTION,
         )
 
-    def test_fewer_candidates_than_truth_at_0_10_fails_category(self) -> None:
+    def test_legacy_confidence_gap_midpoint_method_is_preserved(self) -> None:
         result = calibrate_sam3_thresholds(
             class_name="demo",
             normal_images=("a", "b", "c", "d"),
-            truth_rules_by_image=tuple(_truth(2) for _ in range(4)),
+            truth_rules_by_image=tuple(_truth(1) for _ in range(4)),
             segmenter=_FakeSegmenter(
                 {
-                    "a": [0.90],
-                    "b": [0.92, 0.80],
-                    "c": [0.93, 0.81],
-                    "d": [0.94, 0.82],
+                    "a": [0.90, 0.40],
+                    "b": [0.80, 0.30],
+                    "c": [0.85],
+                    "d": [0.95, 0.50],
                 }
             ),
             mask_processor=_IdentityProcessor(),
-        )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["selected_thresholds"], {})
-        self.assertEqual(
-            result["calibrations"]["part"]["failure_reason"],
-            "candidate_count_below_truth_at_proposal",
+            selection_method=CONFIDENCE_GAP_MIDPOINT_SELECTION,
         )
 
-    def test_allowed_count_set_is_not_guessed_as_sample_truth(self) -> None:
+        entry = result["calibrations"]["part"]
+        self.assertEqual(result["schema"], "pro-innovation.sam3-object-thresholds.v7")
+        self.assertEqual(result["threshold_selection"], "confidence_gap_midpoint")
+        self.assertEqual(result["threshold_grid_step"], 0.10)
+        self.assertEqual(result["threshold_rounding"], "floor")
+        self.assertAlmostEqual(entry["lower_bound_q95_extra"], 0.485)
+        self.assertAlmostEqual(entry["upper_bound_q05_keep"], 0.8075)
+        self.assertAlmostEqual(entry["raw_selected_threshold"], 0.64625)
+        self.assertEqual(entry["selected_threshold"], 0.60)
+        self.assertEqual(result["selected_thresholds"], {"part": 0.60})
+        with tempfile.TemporaryDirectory() as directory:
+            path = save_sam3_threshold_policy(
+                result,
+                Path(directory) / "demo.json",
+            )
+            loaded = load_sam3_threshold_policy(
+                path,
+                expected_class_name="demo",
+            )
+        self.assertEqual(loaded.selected_thresholds, {"part": 0.60})
+
+    def test_legacy_confidence_gap_method_rejects_overlapping_bounds(self) -> None:
+        result = calibrate_sam3_thresholds(
+            class_name="demo",
+            normal_images=("a", "b"),
+            truth_rules_by_image=(_truth(1), _truth(1)),
+            segmenter=_FakeSegmenter(
+                {
+                    "a": [0.70, 0.69],
+                    "b": [0.68, 0.67],
+                }
+            ),
+            mask_processor=_IdentityProcessor(),
+            selection_method=CONFIDENCE_GAP_MIDPOINT_SELECTION,
+        )
+
+        entry = result["calibrations"]["part"]
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(entry["failure_reason"], "no_confidence_gap")
+
+    def test_allowed_count_set_uses_maximum_as_calibration_truth(self) -> None:
         rules = parse_template(
             "[C001] TASK=COUNT | SUBJECT=clip | PROPERTY=count | "
             "OP=EQ | VALUE=[4,6,10]"
         )
-        with self.assertRaisesRegex(ValueError, "sample-specific truth template"):
-            extract_exact_count_truth(rules)
+        self.assertEqual(extract_exact_count_truth(rules), {"clip": 10})
 
     def test_area_count_is_also_used_as_a_calibration_truth(self) -> None:
         rules = parse_template(
@@ -151,19 +204,75 @@ class Sam3CalibrationTests(unittest.TestCase):
             {"fruit": 1, "fruit_region": 1},
         )
 
+    def test_self_symmetry_count_is_not_used_as_object_count_truth(self) -> None:
+        rules = parse_template(
+            "[S001] TASK=SPATIAL_COMBINATION | "
+            "SUBJECT=An electrical wiring assembly | "
+            "PROPERTY=spatial.self_symmetry | OP=EQ | "
+            "VALUE=self_left_right_symmetric | COUNT=[1]"
+        )
+        with self.assertRaisesRegex(ValueError, "no calibratable COUNT"):
+            extract_exact_count_truth(rules)
+
+    def test_non_self_spatial_count_is_not_object_count_truth(self) -> None:
+        rules = parse_template(
+            "[C001] TASK=COUNT | SUBJECT=box | PROPERTY=count | "
+            "OP=EQ | VALUE=[1]\n"
+            "[S001] TASK=SPATIAL_COMBINATION | SUBJECT=almonds | "
+            "PROPERTY=spatial.position | OBJECT=box | OP=GE | "
+            "VALUE=inside | COUNT=[1]"
+        )
+        self.assertEqual(extract_exact_count_truth(rules), {"box": 1})
+
+    def test_explicit_count_wins_over_measurement_subgroup_counts(self) -> None:
+        rules = parse_template(
+            "[C001] TASK=COUNT | SUBJECT=screw | PROPERTY=count | "
+            "OP=EQ | VALUE=[2]\n"
+            "[L001] TASK=LENGTH | SUBJECT=screw | PROPERTY=length | "
+            "OP=RANGE | VALUE=[10,20] | COUNT=[1]\n"
+            "[L002] TASK=LENGTH | SUBJECT=screw | PROPERTY=length | "
+            "OP=RANGE | VALUE=[30,40] | COUNT=[1]"
+        )
+        self.assertEqual(extract_exact_count_truth(rules), {"screw": 2})
+
+    def test_calibration_reports_each_image_and_final_aggregation(self) -> None:
+        events = []
+        images = ("a", "b", "c")
+        calibrate_sam3_thresholds(
+            class_name="demo",
+            normal_images=images,
+            truth_rules_by_image=tuple(_truth(1) for _ in images),
+            segmenter=_FakeSegmenter(
+                {image: [0.90, 0.60] for image in images}
+            ),
+            mask_processor=_IdentityProcessor(),
+            progress_callback=lambda *event: events.append(event),
+        )
+        self.assertEqual(
+            [event[0] for event in events],
+            ["segment+mask"] * 3 + ["aggregate-thresholds"],
+        )
+        self.assertEqual(events[0][1:3], (1, 3))
+        self.assertEqual(events[-1][1:3], (3, 3))
+
     def test_policy_round_trip_preserves_selected_thresholds(self) -> None:
         payload = {
-            "schema": CALIBRATION_SCHEMA,
+            "schema": "pro-innovation.sam3-object-thresholds.v7",
             "class_name": "demo",
             "calibration_samples": 4,
-            "calibration_scope": "normal_only",
+            "calibration_scope": "all_train_good",
             "proposal_threshold": CALIBRATION_PROPOSAL_THRESHOLD,
             "threshold_grid_step": 0.10,
+            "threshold_selection": CONFIDENCE_GAP_MIDPOINT_SELECTION,
+            "threshold_precision_decimals": 2,
             "threshold_rounding": "floor",
             "model_parameters_updated": False,
+            "normal_images": ["a", "b", "c", "d"],
             "selected_thresholds": {"part": 0.70},
             "calibrations": {
-                "part": {"selected_threshold": 0.70},
+                "part": {
+                    "selected_threshold": 0.70,
+                },
             },
             "configuration": {"sam3_prompt": "{category}"},
         }
@@ -171,14 +280,28 @@ class Sam3CalibrationTests(unittest.TestCase):
             path = save_sam3_threshold_policy(
                 payload, Path(directory) / "demo.json"
             )
+            result_path = save_sam3_threshold_calibration_result(
+                payload, Path(directory) / "demo.result.json"
+            )
             loaded = load_sam3_threshold_policy(
                 path, expected_class_name="demo"
             )
             saved_text = path.read_text(encoding="utf-8")
+            result_text = result_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            json.loads(saved_text),
+            {
+                "selected_thresholds": {"part": 0.70},
+                "calibration_images": ["a", "b", "c", "d"],
+                "initial_threshold": 0.20,
+            },
+        )
+        self.assertIn('"proposal_threshold": 0.20', result_text)
+        self.assertIn('"threshold_grid_step": 0.10', result_text)
         self.assertIn('"part": 0.70', saved_text)
-        self.assertIn('"selected_threshold": 0.70', saved_text)
+        self.assertIn('"selected_threshold": 0.70', result_text)
         self.assertEqual(loaded.selected_thresholds, {"part": 0.70})
-        self.assertEqual(loaded.proposal_threshold, 0.10)
+        self.assertEqual(loaded.proposal_threshold, 0.20)
 
     def test_policy_loader_accepts_older_schema_versions(self) -> None:
         payload = {

@@ -21,7 +21,6 @@ class TaskType(str, Enum):
     AREA = "AREA"
     SPATIAL_COMBINATION = "SPATIAL_COMBINATION"
     ATTRIBUTE_COMBINATION = "ATTRIBUTE_COMBINATION"
-    ATTRIBUTE_ERROR = "ATTRIBUTE_ERROR"
 
 
 @dataclass(frozen=True)
@@ -65,7 +64,9 @@ class MaskInstance:
     box: tuple[float, float, float, float] | None = None
 
     def __post_init__(self) -> None:
-        array = np.asarray(self.mask, dtype=bool)
+        # A mask is long-lived pipeline evidence.  Always detach it from an
+        # adapter/framework buffer and make its layout deterministic.
+        array = np.array(self.mask, dtype=np.bool_, copy=True, order="C")
         if array.ndim != 2:
             raise ValueError(f"mask must be two-dimensional, got shape {array.shape}")
         if not array.any():
@@ -102,7 +103,9 @@ class RuleResult:
         scores = (self.satisfaction_score, self.violation_score)
         if self.evidence_valid:
             if self.satisfied is None or any(score is None for score in scores):
-                raise ValueError("valid rule evidence requires a decision and two scores")
+                raise ValueError(
+                    "valid rule evidence requires a decision and two scores"
+                )
         elif self.satisfied is not None or any(score is not None for score in scores):
             raise ValueError("invalid rule evidence must use UNKNOWN and null scores")
         for score in scores:
@@ -133,12 +136,8 @@ class PatchEvidence:
     anomaly: bool
     fusion_score: float | None = None
     fusion_threshold: float | None = None
-    top_fraction: float | None = None
     bank_path: str | None = None
-    layer_thresholds: Mapping[str, float] = field(default_factory=dict)
-    layer_calibrated_scores: Mapping[str, float] = field(default_factory=dict)
     layer_fusion: str = "logsad_mean_map"
-    primary_layer: int | None = None
     winning_layer: int | None = None
     full_image_score: Mapping[str, Any] = field(default_factory=dict)
 
@@ -152,32 +151,19 @@ class PatchEvidence:
             for value in raw_values
         ):
             raise ValueError("patch raw scores and threshold must be in [0, 2]")
-        if not isfinite(float(self.calibrated_score)) or not 0.0 <= float(
-            self.calibrated_score
-        ) <= 1.0:
+        if (
+            not isfinite(float(self.calibrated_score))
+            or not 0.0 <= float(self.calibrated_score) <= 1.0
+        ):
             raise ValueError("calibrated patch score must be in [0, 1]")
         for label, value in (
             ("patch fusion score", self.fusion_score),
             ("patch fusion threshold", self.fusion_threshold),
         ):
-            if value is not None and (
-                not isfinite(float(value)) or not 0.0 <= float(value) <= 1.0
-            ):
-                raise ValueError(f"{label} must be in [0, 1]")
-        if self.top_fraction is not None and (
-            not isfinite(float(self.top_fraction))
-            or not 0.0 < float(self.top_fraction) <= 1.0
-        ):
-            raise ValueError("patch top fraction must be in (0, 1]")
+            if value is not None and (not isfinite(float(value)) or float(value) < 0.0):
+                raise ValueError(f"{label} must be finite and non-negative")
         if self.layer_fusion != "logsad_mean_map":
             raise ValueError("unsupported patch layer fusion")
-        if self.primary_layer is not None and self.primary_layer not in {
-            6,
-            12,
-            18,
-            24,
-        }:
-            raise ValueError("unsupported primary patch layer")
         if self.winning_layer is not None and self.winning_layer not in {
             6,
             12,
@@ -185,19 +171,44 @@ class PatchEvidence:
             24,
         }:
             raise ValueError("unsupported winning patch layer")
-        if self.layer_thresholds and set(self.layer_thresholds) != set(
-            self.layer_scores
-        ):
-            raise ValueError("patch layer thresholds must match layer scores")
-        if self.layer_calibrated_scores and set(
-            self.layer_calibrated_scores
-        ) != set(self.layer_scores):
-            raise ValueError("calibrated patch layers must match layer scores")
+
+
+@dataclass(frozen=True)
+class CompositionEvidence:
+    """PSAD-style image-level component-composition evidence."""
+
+    category_distances: Mapping[str, float]
+    aggregate_raw_score: float
+    threshold: float
+    adaptive_score: float
+    calibrated_score: float
+    anomaly: bool
+    nearest_reference_index: int
+    nearest_reference_image: str | None = None
+    bank_path: str | None = None
+
+    def __post_init__(self) -> None:
+        nonnegative = (
+            *self.category_distances.values(),
+            self.aggregate_raw_score,
+            self.threshold,
+            self.adaptive_score,
+        )
         if any(
-            not isfinite(float(value)) or not 0.0 <= float(value) <= 1.0
-            for value in self.layer_calibrated_scores.values()
+            not isfinite(float(value)) or float(value) < 0.0 for value in nonnegative
         ):
-            raise ValueError("calibrated patch layer scores must be in [0, 1]")
+            raise ValueError(
+                "composition distances and scales must be finite and non-negative"
+            )
+        if self.threshold <= 0.0:
+            raise ValueError("composition threshold must be positive")
+        if (
+            not isfinite(float(self.calibrated_score))
+            or not 0.0 <= float(self.calibrated_score) <= 1.0
+        ):
+            raise ValueError("calibrated composition score must be in [0, 1]")
+        if self.nearest_reference_index < 0:
+            raise ValueError("nearest composition reference index must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -211,26 +222,34 @@ class InferenceReport:
     results: tuple[RuleResult, ...]
     filled_template: str | None
     patch_evidence: PatchEvidence | None = None
+    composition_evidence: CompositionEvidence | None = None
     rule_inference_enabled: bool = True
-    execution_mode: str = "rule_only"
+    execution_mode: str = "rule_binary_only"
+    timings_seconds: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.image_anomaly_score is not None and (
             not isfinite(float(self.image_anomaly_score))
-            or not 0.0 <= float(self.image_anomaly_score) <= 1.0
+            or float(self.image_anomaly_score) < 0.0
         ):
-            raise ValueError("image anomaly score must be in [0, 1]")
+            raise ValueError("image anomaly score must be finite and non-negative")
         if self.anomaly_source not in {
             None,
             "rule",
+            "composition",
             "structural",
             "mixed",
         }:
             raise ValueError("unsupported anomaly source")
         if self.execution_mode not in {
-            "rule_only",
-            "rule_patch",
+            "rule_binary_memory_parallel",
+            "rule_binary_only",
+            "rule_binary_patch",
+            "rule_binary_dual_post",
+            "rule_binary_early_exit",
             "patch_only",
+            "composition_only",
+            "dual_post",
         }:
             raise ValueError("unsupported execution mode")
 
@@ -252,6 +271,7 @@ class InferenceReport:
             return "NORMAL"
         return {
             "rule": "RULE_ANOMALY",
+            "composition": "COMPOSITION_ANOMALY",
             "structural": "STRUCTURAL_ANOMALY",
             "mixed": "MIXED_ANOMALY",
         }.get(self.anomaly_source, "ANOMALY")
@@ -260,9 +280,13 @@ class InferenceReport:
         result = asdict(self)
         result.pop("image_anomaly")
         result.pop("anomaly_source")
+        result.pop("logical_anomaly")
         for item in result["results"]:
             item["task"] = item["task"].value
+            item.pop("satisfied", None)
+        if result["patch_evidence"] is not None:
+            result["patch_evidence"].pop("anomaly", None)
+        if result["composition_evidence"] is not None:
+            result["composition_evidence"].pop("anomaly", None)
         result["categories"] = list(self.categories)
-        result["status"] = self.status
-        result["anomaly"] = self.is_anomaly
         return result

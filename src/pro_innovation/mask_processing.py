@@ -1,4 +1,4 @@
-"""Deterministic cleanup and duplicate suppression for SAM3 masks."""
+"""Deterministic same-category duplicate suppression for SAM3 masks."""
 
 from __future__ import annotations
 
@@ -8,54 +8,6 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from .models import MaskInstance
-
-
-def largest_connected_component(mask: np.ndarray) -> np.ndarray:
-    """Return the largest 8-connected foreground component.
-
-    SAM3 masks occasionally contain small, detached regions from another
-    fastener or a reflection on the bag.  Keeping the main connected body
-    prevents those remote pixels from stretching geometric measurements.
-    """
-
-    foreground = np.asarray(mask, dtype=bool)
-    if foreground.ndim != 2:
-        raise ValueError(f"mask must be two-dimensional, got shape {foreground.shape}")
-
-    height, width = foreground.shape
-    visited = np.zeros_like(foreground, dtype=bool)
-    best_component: list[int] = []
-
-    for y_value, x_value in np.argwhere(foreground):
-        y = int(y_value)
-        x = int(x_value)
-        if visited[y, x]:
-            continue
-
-        visited[y, x] = True
-        stack = [y * width + x]
-        component: list[int] = []
-        while stack:
-            flat_index = stack.pop()
-            current_y, current_x = divmod(flat_index, width)
-            component.append(flat_index)
-            for neighbor_y in range(max(0, current_y - 1), min(height, current_y + 2)):
-                for neighbor_x in range(max(0, current_x - 1), min(width, current_x + 2)):
-                    if (
-                        foreground[neighbor_y, neighbor_x]
-                        and not visited[neighbor_y, neighbor_x]
-                    ):
-                        visited[neighbor_y, neighbor_x] = True
-                        stack.append(neighbor_y * width + neighbor_x)
-
-        if len(component) > len(best_component):
-            best_component = component
-
-    cleaned = np.zeros_like(foreground, dtype=bool)
-    if best_component:
-        flat = cleaned.reshape(-1)
-        flat[np.asarray(best_component, dtype=np.int64)] = True
-    return cleaned
 
 
 def mask_iou(left: np.ndarray, right: np.ndarray) -> float:
@@ -89,19 +41,9 @@ def mask_containment(left: np.ndarray, right: np.ndarray) -> float:
     return float(intersection / smaller_area) if smaller_area else 0.0
 
 
-def _mask_box(mask: np.ndarray) -> tuple[float, float, float, float]:
-    rows, columns = np.nonzero(mask)
-    return (
-        float(columns.min()),
-        float(rows.min()),
-        float(columns.max() + 1),
-        float(rows.max() + 1),
-    )
-
-
 @dataclass(frozen=True)
 class MaskPostprocessor:
-    """Clean each candidate, then suppress duplicate masks within its category.
+    """Suppress duplicate masks independently within each category.
 
     Duplicate suppression is spatial, not semantic: two separate objects are
     retained even when they have the same category and measured length.
@@ -109,14 +51,11 @@ class MaskPostprocessor:
 
     dedup_iou_threshold: float = 0.80
     dedup_containment_threshold: float = 0.85
-    minimum_area_pixels: int = 1
-    cleanup_enabled: bool = True
     dedup_enabled: bool = True
 
     def __post_init__(self) -> None:
         threshold = float(self.dedup_iou_threshold)
         containment_threshold = float(self.dedup_containment_threshold)
-        minimum_area = int(self.minimum_area_pixels)
         if not np.isfinite(threshold) or not 0.0 < threshold <= 1.0:
             raise ValueError("mask deduplication IoU threshold must be in (0, 1]")
         if (
@@ -126,32 +65,15 @@ class MaskPostprocessor:
             raise ValueError(
                 "mask deduplication containment threshold must be in (0, 1]"
             )
-        if minimum_area < 1:
-            raise ValueError("minimum mask area must be at least one pixel")
         object.__setattr__(self, "dedup_iou_threshold", threshold)
         object.__setattr__(
             self, "dedup_containment_threshold", containment_threshold
-        )
-        object.__setattr__(self, "minimum_area_pixels", minimum_area)
-
-    def _clean(self, instance: MaskInstance) -> MaskInstance | None:
-        cleaned = largest_connected_component(instance.mask)
-        if int(np.count_nonzero(cleaned)) < self.minimum_area_pixels:
-            return None
-        return MaskInstance(
-            mask=cleaned,
-            score=instance.score,
-            box=_mask_box(cleaned),
         )
 
     def _process_category(
         self, instances: Sequence[MaskInstance]
     ) -> tuple[MaskInstance, ...]:
-        prepared: list[tuple[int, MaskInstance]] = []
-        for index, instance in enumerate(instances):
-            candidate = self._clean(instance) if self.cleanup_enabled else instance
-            if candidate is not None:
-                prepared.append((index, candidate))
+        prepared = list(enumerate(instances))
 
         if not self.dedup_enabled:
             return tuple(instance for _, instance in prepared)

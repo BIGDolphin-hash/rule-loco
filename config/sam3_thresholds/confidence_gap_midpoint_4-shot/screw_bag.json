@@ -1,0 +1,14 @@
+{
+  "selected_thresholds": {
+    "screw": 0.70,
+    "hexagonal_nut": 0.70,
+    "thin flat washer with smooth round outer edge": 0.70
+  },
+  "calibration_images": [
+    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/010.png",
+    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/015.png",
+    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/018.png",
+    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/025.png"
+  ],
+  "initial_threshold": 0.60
+}

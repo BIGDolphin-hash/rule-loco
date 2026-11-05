@@ -1,13 +1,24 @@
-"""Template-driven logic and patch anomaly detection."""
+"""Template-driven rule and patch anomaly detection.
 
-from .models import InferenceReport, PatchEvidence, Rule, RuleResult, TaskType
+Global Patch, GPSTM, GCDA and GPO-JM provide post-rule memory detection.
+"""
+
+from .models import (
+    CompositionEvidence,
+    InferenceReport,
+    PatchEvidence,
+    Rule,
+    RuleResult,
+    TaskType,
+)
 from .mask_processing import MaskPostprocessor
-from .patch_memory import DinoV2PatchImageScorer, PatchMemoryBank
+from .memory_modules.global_patch import DinoV2PatchImageScorer, PatchMemoryBank
 from .pipeline import LogicAnomalyPipeline
 from .templates import parse_template, serialize_template, to_generic_template
 
 __all__ = [
     "InferenceReport",
+    "CompositionEvidence",
     "LogicAnomalyPipeline",
     "MaskPostprocessor",
     "PatchMemoryBank",

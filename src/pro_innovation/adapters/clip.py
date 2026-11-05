@@ -138,7 +138,9 @@ class ClipAttributeDetector:
             return image.convert("RGB")
         if isinstance(image, (str, Path)):
             with Image.open(image) as opened:
-                return opened.convert("RGB")
+                converted = opened.convert("RGB")
+                converted.load()
+                return converted.copy()
         array = np.asarray(image)
         if array.ndim != 3 or array.shape[2] not in {3, 4}:
             raise ExecutionError(f"expected an RGB image, got shape {array.shape}")

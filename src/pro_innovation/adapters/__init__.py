@@ -3,6 +3,7 @@
 from .clip import ClipAttributeDetector, LocalClipRuntime
 from .patch_dinov2 import DinoV2PatchFeatureExtractor, PatchFeatureBundle
 from .sam3 import Sam3Segmenter
+from .whole_image import WholeImageSegmenter
 
 __all__ = [
     "ClipAttributeDetector",
@@ -10,4 +11,5 @@ __all__ = [
     "LocalClipRuntime",
     "PatchFeatureBundle",
     "Sam3Segmenter",
+    "WholeImageSegmenter",
 ]

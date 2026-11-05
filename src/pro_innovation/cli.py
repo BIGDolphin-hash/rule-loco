@@ -9,7 +9,8 @@ import json
 from pathlib import Path
 import re
 import sys
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
 
 from .adapters import (
     ClipAttributeDetector,
@@ -24,12 +25,18 @@ from .evaluation import (
     MVTEC_LOCO,
     VISA,
     SUPPORTED_DATASETS,
+    build_sam3_dataset_cache,
     evaluate_dataset,
     evaluate_screw_bag,
     validate_attribute_vocabulary,
 )
 from .mask_processing import MaskPostprocessor
-from .patch_memory import (
+from .image_validation import filter_decodable_images
+from .memory_modules.global_patch import (
+    PATCH_FEATURE_GLOBAL,
+    PATCH_MEMORY_PER_IMAGE_STORAGE,
+    DEFAULT_CORESET_RATIO,
+    DEFAULT_CORESET_SEED,
     DEFAULT_PATCH_LAYER_FUSION,
     patch_memory_run_tag,
     DinoV2PatchImageScorer,
@@ -39,11 +46,17 @@ from .patch_memory import (
 from .adapters.patch_dinov2 import (
     DEFAULT_PATCH_DINOV2_CHECKPOINT,
 )
-from .pipeline import LogicAnomalyPipeline
+from .pipeline import (
+    LogicAnomalyPipeline,
+    RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
+    RULE_MEMORY_SCHEDULES,
+)
 from .sam3_calibration import (
+    CALIBRATION_SELECTION_METHODS,
     CALIBRATION_PROPOSAL_THRESHOLD,
     calibrate_sam3_thresholds,
     load_sam3_threshold_policy,
+    save_sam3_threshold_calibration_result,
     save_sam3_threshold_policy,
 )
 from .template_store import TemplateRepository
@@ -55,15 +68,22 @@ from .templates import (
     validate_generic_values_missing,
 )
 
+DEFAULT_PATCH_BANK_ROOT = "memory_banks/Global patch/full"
 
-DEFAULT_PATCH_BANK_ROOT = "/home/lxq/pro-innovation/memory_banks/4-shot"
-DEFAULT_SAM3_THRESHOLD_POLICY_ROOT = (
-    "/home/lxq/pro-innovation/config/sam3_thresholds"
+DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT = (
+    "config/sam3_thresholds"
 )
+DEFAULT_SAM3_THRESHOLD_POLICY_ROOT = (
+    f"{DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT}/" "confidence_gap_midpoint_4-shot"
+)
+DEFAULT_SAM3_THRESHOLD_RESULT_ROOT = (
+    "results/sam3_threshold_calibration"
+)
+DEFAULT_SAM3_CACHE_ROOT = "cache/sam3"
 DEFAULT_DATASET_BASES = {
-    MVTEC_LOCO: "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection",
-    MVTEC_AD: "/home/lxq/pro-innovation/datasets/mvtec_anomaly_detection",
-    VISA: "/home/lxq/pro-innovation/datasets/visa",
+    MVTEC_LOCO: "datasets/mvtec_loco_anomaly_detection",
+    MVTEC_AD: "datasets/mvtec_anomaly_detection",
+    VISA: "datasets/visa",
 }
 
 
@@ -71,11 +91,48 @@ def _read(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
+def _resolve_normal_images(args: argparse.Namespace) -> tuple[Path, ...]:
+    explicit = getattr(args, "normal_images", None)
+    directory = getattr(args, "normal_dir", None)
+    if bool(explicit) == bool(directory):
+        raise ValueError("provide exactly one of --normal-images or --normal-dir")
+    if directory:
+        root = Path(directory).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError(f"normal image directory not found: {root}")
+        paths = tuple(
+            path.resolve()
+            for path in sorted(root.iterdir())
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        )
+    else:
+        paths = tuple(Path(path).expanduser().resolve() for path in explicit)
+    if len(paths) < 1:
+        raise ValueError("normal memory requires at least one image")
+    if len(set(paths)) != len(paths):
+        raise ValueError("normal memory images must be distinct")
+    return paths
+
+
 def _write_or_print(text: str, output: str | None) -> None:
     if output:
         Path(output).write_text(text.rstrip() + "\n", encoding="utf-8")
     else:
         print(text)
+
+
+def _progress_reporter(module: str):
+    """Return a flushed stderr reporter without contaminating JSON stdout."""
+
+    def report(stage: str, current: int, total: int, detail: str) -> None:
+        percentage = 100.0 * current / total if total else 100.0
+        print(
+            f"[{module}][{stage}] {current}/{total} " f"({percentage:5.1f}%) {detail}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return report
 
 
 def _probability_argument(value: str) -> float:
@@ -158,6 +215,7 @@ def _patch_bank_path(args: argparse.Namespace, class_name: str | None) -> Path:
     return (
         Path(args.patch_bank_root).expanduser().resolve()
         / dataset_name
+        / "global"
         / f"{class_name}.{patch_memory_run_tag()}.npz"
     )
 
@@ -175,8 +233,6 @@ def _sam3_threshold_configuration(
         "sam3_checkpoint": str(Path(args.sam3_checkpoint).expanduser().resolve()),
         "mask_dedup_iou_threshold": float(args.mask_dedup_iou),
         "mask_dedup_containment_threshold": float(args.mask_dedup_containment),
-        "mask_minimum_area_pixels": int(args.mask_min_area),
-        "mask_cleanup_enabled": bool(args.mask_cleanup),
         "mask_dedup_enabled": bool(args.mask_dedup),
         "standard_template": str(standard),
         "standard_template_sha256": _file_sha256(standard),
@@ -190,6 +246,7 @@ def _resolve_sam3_threshold_runtime(
     policy_root: str | Path,
     explicit_policy_path: str | None,
     expected_configuration: Mapping[str, Any],
+    expected_categories: Sequence[str] | None = None,
 ) -> tuple[dict[str, float], str, str | None]:
     if not enabled:
         return {}, "global_only", None
@@ -204,18 +261,29 @@ def _resolve_sam3_threshold_runtime(
             raise ValueError(f"SAM3 threshold policy not found: {path}")
         return {}, "global_only", None
 
-    policy = load_sam3_threshold_policy(
-        path, expected_class_name=class_name
-    )
+    policy = load_sam3_threshold_policy(path, expected_class_name=class_name)
+    if expected_categories is not None:
+        expected_category_set = set(expected_categories)
+        saved_category_set = set(policy.selected_thresholds)
+        extra = sorted(saved_category_set - expected_category_set)
+        if extra:
+            raise ValueError(
+                "saved SAM3 threshold policy categories do not match runtime: "
+                + "extra="
+                + ",".join(extra)
+            )
     mismatched = []
-    for key, expected in expected_configuration.items():
-        actual = policy.configuration.get(key)
-        if isinstance(expected, float) and isinstance(actual, (int, float)):
-            matches = abs(float(actual) - expected) <= 1e-12
-        else:
-            matches = actual == expected
-        if not matches:
-            mismatched.append(key)
+    if policy.configuration:
+        for key, expected in expected_configuration.items():
+            if key == "standard_template_sha256":
+                continue
+            actual = policy.configuration.get(key)
+            if isinstance(expected, float) and isinstance(actual, (int, float)):
+                matches = abs(float(actual) - expected) <= 1e-12
+            else:
+                matches = actual == expected
+            if not matches:
+                mismatched.append(key)
     if mismatched:
         raise ValueError(
             "saved SAM3 threshold policy configuration does not match runtime: "
@@ -235,6 +303,10 @@ def _make_patch_scorer(
 ) -> DinoV2PatchImageScorer | None:
     if not args.patch_matching:
         return None
+    extractor = DinoV2PatchFeatureExtractor(
+        checkpoint_path=args.patch_dinov2_checkpoint,
+        device=args.device,
+    )
     bank = PatchMemoryBank.load(
         _patch_bank_path(args, class_name),
         expected_class_name=class_name,
@@ -242,10 +314,7 @@ def _make_patch_scorer(
     )
     return DinoV2PatchImageScorer(
         bank=bank,
-        extractor=DinoV2PatchFeatureExtractor(
-            checkpoint_path=args.patch_dinov2_checkpoint,
-            device=args.device,
-        ),
+        extractor=extractor,
         query_batch_size=args.patch_query_batch_size,
         extraction_batch_size=args.patch_extraction_batch_size,
     )
@@ -257,16 +326,22 @@ def _add_patch_runtime_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "enable or disable four-shot DINOv2 LogSAD patch matching "
+            "enable or disable full-normal Coreset DINOv2 LogSAD matching "
             "(disabled by default)"
         ),
+    )
+    parser.add_argument(
+        "--patch-feature-mode",
+        choices=(PATCH_FEATURE_GLOBAL,),
+        default=PATCH_FEATURE_GLOBAL,
+        help=("use full-image Global Patch memory matching"),
     )
     parser.add_argument(
         "--patch-bank-root",
         default=DEFAULT_PATCH_BANK_ROOT,
         help=(
-            "four-shot bank root containing one dataset directory per layout; "
-            f"banks are <dataset>/<class-name>.{patch_memory_run_tag()}.npz"
+            "texture bank root containing one dataset directory per layout; "
+            f"banks are <dataset>/global/<class-name>.{patch_memory_run_tag()}.npz"
         ),
     )
     parser.add_argument(
@@ -288,7 +363,19 @@ def _add_rule_runtime_arguments(parser: argparse.ArgumentParser) -> None:
         default=True,
         help=(
             "enable or disable template/SAM3 rule inference; disabling it "
-            "requires --patch-matching and skips all rule dependencies"
+            "requires --patch-matching"
+        ),
+    )
+    parser.add_argument(
+        "--rule-memory-schedule",
+        dest="rule_memory_schedule",
+        choices=RULE_MEMORY_SCHEDULES,
+        default=RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
+        help=(
+            "binary-selective stops at the first failed rule with score 1 "
+            "and runs memory detection only when all rules pass; "
+            "binary-parallel runs both branches concurrently and takes the "
+            "maximum of the 0/1 rule score and memory score"
         ),
     )
 
@@ -334,28 +421,68 @@ def _add_sam3_threshold_runtime_arguments(
     )
 
 
+def _add_sam3_cache_runtime_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--sam3-cache-root",
+        default=DEFAULT_SAM3_CACHE_ROOT,
+        help="directory containing reusable per-image, per-prompt SAM3 proposals",
+    )
+    parser.add_argument(
+        "--sam3-cache-mode",
+        choices=Sam3Segmenter.CACHE_MODES,
+        default="read-write",
+        help=(
+            "off disables caching; read requires a hit; read-write reuses hits "
+            "and fills misses; refresh recomputes and replaces entries"
+        ),
+    )
+
+
 def _command_infer(args: argparse.Namespace) -> int:
-    _validate_runtime_branches(args)
     class_name = _validate_class_name(args.class_name) if args.class_name else None
-    if args.rule_inference:
-        if args.generic is None or args.standard is None:
+    sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
+        _resolve_sam3_threshold_runtime(
+            class_name=class_name,
+            enabled=args.object_sam3_thresholds,
+            policy_root=args.sam3_threshold_policy_root,
+            explicit_policy_path=args.sam3_threshold_policy,
+            expected_configuration=(
+                _sam3_threshold_configuration(args, standard_path=args.standard)
+                if args.standard is not None
+                else {}
+            ),
+            expected_categories=None,
+        )
+    )
+    _validate_runtime_branches(args)
+    mask_inference_enabled = args.rule_inference
+    if mask_inference_enabled:
+        if args.generic is None or (args.rule_inference and args.standard is None):
             raise ValueError(
-                "rule inference requires both --generic and --standard"
+                "mask-based inference requires --generic; rule inference also requires --standard"
             )
         generic = parse_template(_read(args.generic), allow_missing_values=True)
-        standard = parse_template(_read(args.standard), allow_missing_values=False)
-        categories = collect_categories(generic)
-        sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
-            _resolve_sam3_threshold_runtime(
-                class_name=class_name,
-                enabled=args.object_sam3_thresholds,
-                policy_root=args.sam3_threshold_policy_root,
-                explicit_policy_path=args.sam3_threshold_policy,
-                expected_configuration=_sam3_threshold_configuration(
-                    args, standard_path=args.standard
-                ),
-            )
+        standard = (
+            parse_template(_read(args.standard), allow_missing_values=False)
+            if args.rule_inference
+            else ()
         )
+        categories = collect_categories(generic)
+        if sam3_policy_path is not None:
+            sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
+                _resolve_sam3_threshold_runtime(
+                    class_name=class_name,
+                    enabled=args.object_sam3_thresholds,
+                    policy_root=args.sam3_threshold_policy_root,
+                    explicit_policy_path=args.sam3_threshold_policy,
+                    expected_configuration=(
+                        _sam3_threshold_configuration(args, standard_path=args.standard)
+                        if args.standard is not None
+                        else {}
+                    ),
+                    expected_categories=categories,
+                )
+            )
         segmenter = Sam3Segmenter(
             repo_path=args.sam3_repo,
             checkpoint_path=args.sam3_checkpoint,
@@ -363,31 +490,34 @@ def _command_infer(args: argparse.Namespace) -> int:
             confidence_threshold=args.sam3_threshold,
             category_thresholds=sam3_category_thresholds,
             prompt_template=args.sam3_prompt,
+            cache_root=args.sam3_cache_root,
+            cache_mode=args.sam3_cache_mode,
         )
-        vocabulary = _load_vocabulary(args.attribute_vocabulary)
-        validate_attribute_vocabulary(standard, vocabulary)
-        clip_runtime = LocalClipRuntime(
-            repo_path=args.clip_repo,
-            checkpoint_path=args.clip_checkpoint,
-            device=args.device,
-        )
-        clip_detector = ClipAttributeDetector(
-            repo_path=args.clip_repo,
-            checkpoint_path=args.clip_checkpoint,
-            vocabulary=vocabulary,
-            device=args.device,
-            confidence_threshold=args.clip_threshold,
-            runtime=clip_runtime,
-        )
-        detector = RoutedAttributeDetector(
-            semantic_detector=clip_detector if vocabulary else None,
-            vocabulary=vocabulary,
-        )
+        if args.rule_inference:
+            vocabulary = _load_vocabulary(args.attribute_vocabulary)
+            validate_attribute_vocabulary(standard, vocabulary)
+            clip_runtime = LocalClipRuntime(
+                repo_path=args.clip_repo,
+                checkpoint_path=args.clip_checkpoint,
+                device=args.device,
+            )
+            clip_detector = ClipAttributeDetector(
+                repo_path=args.clip_repo,
+                checkpoint_path=args.clip_checkpoint,
+                vocabulary=vocabulary,
+                device=args.device,
+                confidence_threshold=args.clip_threshold,
+                runtime=clip_runtime,
+            )
+            detector = RoutedAttributeDetector(
+                semantic_detector=clip_detector if vocabulary else None,
+                vocabulary=vocabulary,
+            )
+        else:
+            detector = None
         mask_processor = MaskPostprocessor(
             dedup_iou_threshold=args.mask_dedup_iou,
             dedup_containment_threshold=args.mask_dedup_containment,
-            minimum_area_pixels=args.mask_min_area,
-            cleanup_enabled=args.mask_cleanup,
             dedup_enabled=args.mask_dedup,
         )
     else:
@@ -397,12 +527,8 @@ def _command_infer(args: argparse.Namespace) -> int:
         detector = None
         mask_processor = None
         sam3_category_thresholds = {}
-        sam3_threshold_policy = "disabled"
-        sam3_policy_path = None
-    patch_scorer = _make_patch_scorer(
-        args,
-        class_name=class_name,
-    )
+        sam3_threshold_policy = "global_only"
+    patch_scorer = _make_patch_scorer(args, class_name=class_name)
     pipeline = LogicAnomalyPipeline(
         segmenter,
         detector,
@@ -410,34 +536,72 @@ def _command_infer(args: argparse.Namespace) -> int:
         patch_scorer=patch_scorer,
         grouping_tolerance=args.grouping_tolerance,
         rule_inference_enabled=args.rule_inference,
+        rule_memory_schedule=args.rule_memory_schedule,
     )
     report = pipeline.run(args.image, generic, standard)
     report_payload = report.to_dict()
     report_payload["patch_matching_enabled"] = bool(args.patch_matching)
+    report_payload["patch_feature_mode"] = "global" if args.patch_matching else None
+    report_payload["category_threshold_policy_active"] = bool(
+        sam3_policy_path is not None and sam3_category_thresholds
+    )
     report_payload["rule_inference_enabled"] = bool(args.rule_inference)
-    report_payload["patch_primary_layer"] = None
     report_payload["patch_layer_fusion"] = (
         DEFAULT_PATCH_LAYER_FUSION if args.patch_matching else None
     )
     report_payload["sam3_threshold_policy"] = sam3_threshold_policy
     report_payload["sam3_global_fallback_threshold"] = (
-        args.sam3_threshold if args.rule_inference else None
+        args.sam3_threshold if mask_inference_enabled else None
     )
     report_payload["clip_attribute_confidence_threshold"] = (
         args.clip_threshold if args.rule_inference else None
     )
     report_payload["sam3_category_thresholds"] = sam3_category_thresholds
     report_payload["sam3_threshold_policy_path"] = sam3_policy_path
+    report_payload["sam3_cache_root"] = (
+        str(Path(args.sam3_cache_root).expanduser().resolve())
+        if mask_inference_enabled
+        else None
+    )
+    report_payload["sam3_cache_mode"] = (
+        args.sam3_cache_mode if mask_inference_enabled else "off"
+    )
+    report_payload["sam3_cache_hits"] = (
+        segmenter.cache_hits if segmenter is not None else 0
+    )
+    report_payload["sam3_cache_misses"] = (
+        segmenter.cache_misses if segmenter is not None else 0
+    )
+    report_payload["sam3_cache_writes"] = (
+        segmenter.cache_writes if segmenter is not None else 0
+    )
     payload = json.dumps(report_payload, ensure_ascii=False, indent=2)
     _write_or_print(payload, args.output)
     if report.is_anomaly is None:
         return 2
+    if report.is_anomaly is None:
+        return 0
     return 1 if report.is_anomaly else 0
 
 
 def _command_evaluate_screw_bag(args: argparse.Namespace) -> int:
+    initial_configuration = (
+        _sam3_threshold_configuration(args, standard_path=args.standard)
+        if Path(args.standard).expanduser().is_file()
+        else {}
+    )
+    sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
+        _resolve_sam3_threshold_runtime(
+            class_name="screw_bag",
+            enabled=args.object_sam3_thresholds,
+            policy_root=args.sam3_threshold_policy_root,
+            explicit_policy_path=args.sam3_threshold_policy,
+            expected_configuration=initial_configuration,
+            expected_categories=None,
+        )
+    )
     _validate_runtime_branches(args)
-    if args.rule_inference:
+    if sam3_policy_path is not None:
         sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
             _resolve_sam3_threshold_runtime(
                 class_name="screw_bag",
@@ -447,54 +611,52 @@ def _command_evaluate_screw_bag(args: argparse.Namespace) -> int:
                 expected_configuration=_sam3_threshold_configuration(
                     args, standard_path=args.standard
                 ),
+                expected_categories=collect_categories(
+                    parse_template(_read(args.generic), allow_missing_values=True)
+                ),
             )
         )
-    else:
-        sam3_category_thresholds = {}
-        sam3_threshold_policy = "disabled"
-        sam3_policy_path = None
     summary = evaluate_screw_bag(
-                dataset_root=args.dataset_root,
-                generic_path=args.generic,
-                standard_path=args.standard,
-                result_root=args.result_root,
-                sam3_threshold=args.sam3_threshold,
-                sam3_category_thresholds=sam3_category_thresholds,
-                sam3_threshold_policy=sam3_threshold_policy,
-                sam3_threshold_policy_path=sam3_policy_path,
-                sam3_repo=args.sam3_repo,
-                sam3_checkpoint=args.sam3_checkpoint,
-                clip_repo=args.clip_repo,
-                clip_checkpoint=args.clip_checkpoint,
-                clip_threshold=args.clip_threshold,
-                device=args.device,
-                sam3_prompt=args.sam3_prompt,
-                mask_dedup_iou=args.mask_dedup_iou,
-                mask_dedup_containment=args.mask_dedup_containment,
-                mask_min_area=args.mask_min_area,
-                mask_cleanup=args.mask_cleanup,
-                mask_dedup=args.mask_dedup,
-                rule_inference_enabled=args.rule_inference,
-                patch_enabled=args.patch_matching,
-                patch_bank_path=(
-                    str(_patch_bank_path(args, "screw_bag"))
-                    if args.patch_matching
-                    else None
-                ),
-                patch_dinov2_checkpoint=args.patch_dinov2_checkpoint,
-                patch_query_batch_size=args.patch_query_batch_size,
-                patch_extraction_batch_size=args.patch_extraction_batch_size,
-                include_structural_anomalies=args.all_test_splits,
-                restart=args.restart,
-                test_split=args.test_split,
-                test_splits=args.test_splits,
-            )
+        dataset_root=args.dataset_root,
+        generic_path=args.generic,
+        standard_path=args.standard,
+        result_root=args.result_root,
+        sam3_threshold=args.sam3_threshold,
+        sam3_category_thresholds=sam3_category_thresholds,
+        sam3_threshold_policy=sam3_threshold_policy,
+        sam3_threshold_policy_path=sam3_policy_path,
+        sam3_repo=args.sam3_repo,
+        sam3_checkpoint=args.sam3_checkpoint,
+        clip_repo=args.clip_repo,
+        clip_checkpoint=args.clip_checkpoint,
+        clip_threshold=args.clip_threshold,
+        device=args.device,
+        sam3_prompt=args.sam3_prompt,
+        mask_dedup_iou=args.mask_dedup_iou,
+        mask_dedup_containment=args.mask_dedup_containment,
+        mask_dedup=args.mask_dedup,
+        rule_inference_enabled=args.rule_inference,
+        rule_memory_schedule=args.rule_memory_schedule,
+        patch_enabled=args.patch_matching,
+        patch_feature_mode="global",
+        patch_bank_path=(
+            str(_patch_bank_path(args, "screw_bag")) if args.patch_matching else None
+        ),
+        patch_dinov2_checkpoint=args.patch_dinov2_checkpoint,
+        patch_query_batch_size=args.patch_query_batch_size,
+        patch_extraction_batch_size=args.patch_extraction_batch_size,
+        include_structural_anomalies=args.all_test_splits,
+        restart=args.restart,
+        test_split=args.test_split,
+        test_splits=args.test_splits,
+        sam3_cache_root=args.sam3_cache_root,
+        sam3_cache_mode=args.sam3_cache_mode,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["failure_count"] == 0 else 2
 
 
 def _command_evaluate(args: argparse.Namespace) -> int:
-    _validate_runtime_branches(args)
     class_name = _validate_class_name(args.class_name)
     dataset_base = args.dataset_base or DEFAULT_DATASET_BASES[args.dataset]
     dataset_root = args.dataset_root or str(
@@ -508,93 +670,139 @@ def _command_evaluate(args: argparse.Namespace) -> int:
     standard_path = args.standard or str(
         Path(args.template_root) / f"{class_name}.standard.rules"
     )
-    if args.rule_inference:
-        sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
-            _resolve_sam3_threshold_runtime(
-                class_name=class_name,
-                enabled=args.object_sam3_thresholds,
-                policy_root=args.sam3_threshold_policy_root,
-                explicit_policy_path=args.sam3_threshold_policy,
-                expected_configuration=_sam3_threshold_configuration(
-                    args, standard_path=standard_path
-                ),
-            )
+    initial_configuration = (
+        _sam3_threshold_configuration(args, standard_path=standard_path)
+        if Path(standard_path).expanduser().is_file()
+        else {}
+    )
+    sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
+        _resolve_sam3_threshold_runtime(
+            class_name=class_name,
+            enabled=args.object_sam3_thresholds,
+            policy_root=args.sam3_threshold_policy_root,
+            explicit_policy_path=args.sam3_threshold_policy,
+            expected_configuration=initial_configuration,
+            expected_categories=None,
         )
-        vocabulary = _load_vocabulary(args.attribute_vocabulary)
+    )
+    _validate_runtime_branches(args)
+    mask_inference_enabled = args.rule_inference
+    if mask_inference_enabled:
+        runtime_categories = collect_categories(
+            parse_template(_read(generic_path), allow_missing_values=True)
+        )
+        if sam3_policy_path is not None:
+            sam3_category_thresholds, sam3_threshold_policy, sam3_policy_path = (
+                _resolve_sam3_threshold_runtime(
+                    class_name=class_name,
+                    enabled=args.object_sam3_thresholds,
+                    policy_root=args.sam3_threshold_policy_root,
+                    explicit_policy_path=args.sam3_threshold_policy,
+                    expected_configuration=_sam3_threshold_configuration(
+                        args, standard_path=standard_path
+                    ),
+                    expected_categories=runtime_categories,
+                )
+            )
+        vocabulary = (
+            _load_vocabulary(args.attribute_vocabulary) if args.rule_inference else {}
+        )
     else:
         sam3_category_thresholds = {}
         sam3_threshold_policy = "disabled"
         sam3_policy_path = None
         vocabulary = {}
     summary = evaluate_dataset(
-                class_name=class_name,
-                dataset_root=dataset_root,
-                generic_path=generic_path,
-                standard_path=standard_path,
-                result_root=args.result_root,
-                sam3_threshold=args.sam3_threshold,
-                sam3_category_thresholds=sam3_category_thresholds,
-                sam3_threshold_policy=sam3_threshold_policy,
-                sam3_threshold_policy_path=sam3_policy_path,
-                sam3_repo=args.sam3_repo,
-                sam3_checkpoint=args.sam3_checkpoint,
-                clip_repo=args.clip_repo,
-                clip_checkpoint=args.clip_checkpoint,
-                clip_threshold=args.clip_threshold,
-                attribute_vocabulary=vocabulary,
-                device=args.device,
-                grouping_tolerance=args.grouping_tolerance,
-                sam3_prompt=args.sam3_prompt,
-                mask_dedup_iou=args.mask_dedup_iou,
-                mask_dedup_containment=args.mask_dedup_containment,
-                mask_min_area=args.mask_min_area,
-                mask_cleanup=args.mask_cleanup,
-                mask_dedup=args.mask_dedup,
-                rule_inference_enabled=args.rule_inference,
-                patch_enabled=args.patch_matching,
-                patch_bank_path=(
-                    str(_patch_bank_path(args, class_name))
-                    if args.patch_matching
-                    else None
-                ),
-                patch_dinov2_checkpoint=args.patch_dinov2_checkpoint,
-                patch_query_batch_size=args.patch_query_batch_size,
-                patch_extraction_batch_size=args.patch_extraction_batch_size,
-                include_structural_anomalies=args.all_test_splits,
-                restart=args.restart,
-                test_split=args.test_split,
-                test_splits=args.test_splits,
-                dataset_name=args.dataset,
-            )
+        class_name=class_name,
+        dataset_root=dataset_root,
+        generic_path=generic_path,
+        standard_path=standard_path,
+        result_root=args.result_root,
+        sam3_threshold=args.sam3_threshold,
+        sam3_category_thresholds=sam3_category_thresholds,
+        sam3_threshold_policy=sam3_threshold_policy,
+        sam3_threshold_policy_path=sam3_policy_path,
+        sam3_repo=args.sam3_repo,
+        sam3_checkpoint=args.sam3_checkpoint,
+        clip_repo=args.clip_repo,
+        clip_checkpoint=args.clip_checkpoint,
+        clip_threshold=args.clip_threshold,
+        attribute_vocabulary=vocabulary,
+        device=args.device,
+        grouping_tolerance=args.grouping_tolerance,
+        sam3_prompt=args.sam3_prompt,
+        mask_dedup_iou=args.mask_dedup_iou,
+        mask_dedup_containment=args.mask_dedup_containment,
+        mask_dedup=args.mask_dedup,
+        rule_inference_enabled=args.rule_inference,
+        rule_memory_schedule=args.rule_memory_schedule,
+        patch_enabled=args.patch_matching,
+        patch_feature_mode="global",
+        patch_bank_path=(
+            str(_patch_bank_path(args, class_name)) if args.patch_matching else None
+        ),
+        patch_dinov2_checkpoint=args.patch_dinov2_checkpoint,
+        patch_query_batch_size=args.patch_query_batch_size,
+        patch_extraction_batch_size=args.patch_extraction_batch_size,
+        include_structural_anomalies=args.all_test_splits,
+        restart=args.restart,
+        test_split=args.test_split,
+        test_splits=args.test_splits,
+        dataset_name=args.dataset,
+        sam3_cache_root=args.sam3_cache_root,
+        sam3_cache_mode=args.sam3_cache_mode,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if summary["failure_count"] == 0 else 2
+
+
+def _command_cache_sam3(args: argparse.Namespace) -> int:
+    class_name = _validate_class_name(args.class_name)
+    dataset_base = args.dataset_base or DEFAULT_DATASET_BASES[args.dataset]
+    dataset_root = args.dataset_root or str(
+        Path(dataset_base)
+        if args.dataset == VISA
+        else Path(dataset_base) / class_name / "test"
+    )
+    generic_path = args.generic or str(
+        Path(args.template_root) / f"{class_name}.generic.rules"
+    )
+    summary = build_sam3_dataset_cache(
+        class_name=class_name,
+        dataset_root=dataset_root,
+        generic_path=generic_path,
+        cache_root=args.sam3_cache_root,
+        sam3_threshold=args.sam3_threshold,
+        sam3_repo=args.sam3_repo,
+        sam3_checkpoint=args.sam3_checkpoint,
+        device=args.device,
+        sam3_prompt=args.sam3_prompt,
+        test_splits=args.test_splits,
+        dataset_name=args.dataset,
+        refresh=args.refresh,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["failure_count"] == 0 else 2
 
 
 def _command_build_patch_memory(args: argparse.Namespace) -> int:
     class_name = _validate_class_name(args.class_name)
-    calibration_dir = Path(args.calibration_dir).expanduser().resolve()
-    calibration_images = tuple(
-        path
-        for path in sorted(calibration_dir.iterdir())
-        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
-    )
-    if len(calibration_images) < 2:
-        raise ValueError(
-            "LogSAD calibration directory must contain at least two JPG or PNG images"
-        )
+    normal_images = _resolve_normal_images(args)
     output = args.output or str(
         Path(args.patch_bank_root).expanduser().resolve()
-        / f"{class_name}.{patch_memory_run_tag()}.npz"
+        / f"{class_name}.{patch_memory_run_tag(args.patch_coreset_ratio)}.npz"
     )
     bank = build_patch_memory_from_images(
         class_name=class_name,
-        normal_images=args.normal_images,
-        calibration_images=calibration_images,
+        normal_images=normal_images,
         output_path=output,
         checkpoint_path=args.patch_dinov2_checkpoint,
         device=args.device,
         query_batch_size=args.patch_query_batch_size,
         extraction_batch_size=args.patch_extraction_batch_size,
+        coreset_ratio=args.patch_coreset_ratio,
+        coreset_seed=args.patch_coreset_seed,
+        progress_callback=_progress_reporter("patch-memory"),
     )
     print(
         json.dumps(
@@ -610,11 +818,15 @@ def _command_build_patch_memory(args: argparse.Namespace) -> int:
                 "matching": "global_cosine_nearest_neighbor",
                 "layer_aggregation": "mean_anomaly_map",
                 "image_aggregation": "spatial_max",
-                "coreset_enabled": False,
+                "coreset_enabled": True,
+                "coreset_ratio": bank.coreset_ratio,
+                "coreset_seed": bank.coreset_seed,
+                "coreset_patch_count": int(bank.memory_source_indices.numel()),
                 "score_mean": bank.score_mean,
                 "score_unbiased_std": bank.score_unbiased_std,
                 "calibration_mode": bank.calibration_mode,
-                "memory_scope": "full_image_only",
+                "memory_scope": "all_train_good_images_patch_coreset",
+                "storage": PATCH_MEMORY_PER_IMAGE_STORAGE,
             },
             ensure_ascii=False,
             indent=2,
@@ -625,6 +837,18 @@ def _command_build_patch_memory(args: argparse.Namespace) -> int:
 
 def _command_calibrate_sam3(args: argparse.Namespace) -> int:
     class_name = _validate_class_name(args.class_name)
+    output = (
+        Path(
+            args.output or Path(args.sam3_threshold_policy_root) / f"{class_name}.json"
+        )
+        .expanduser()
+        .resolve()
+    )
+    if output.exists() and not args.overwrite:
+        raise ValueError(
+            f"SAM3 threshold policy already exists: {output}; "
+            "choose a different --output path or pass --overwrite explicitly"
+        )
     standard_path = args.standard or str(
         Path(args.template_root) / f"{class_name}.standard.rules"
     )
@@ -632,16 +856,25 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
         Path(standard_path).read_text(encoding="utf-8"),
         allow_missing_values=False,
     )
-    normal_images = tuple(
-        Path(path).expanduser().resolve() for path in args.normal_images
-    )
-    if len(set(normal_images)) != 4:
-        raise ValueError("SAM3 calibration requires four distinct normal images")
-    missing_images = [str(path) for path in normal_images if not path.is_file()]
+    input_normal_images = _resolve_normal_images(args)
+    missing_images = [str(path) for path in input_normal_images if not path.is_file()]
     if missing_images:
         raise ValueError(
             "normal calibration images not found: " + ", ".join(missing_images)
         )
+    progress = _progress_reporter("sam3-threshold")
+    normal_images = filter_decodable_images(
+        input_normal_images,
+        progress_callback=progress,
+    )
+    if len(normal_images) < 2:
+        raise ValueError(
+            "SAM3 calibration needs at least two decodable normal images " "after skips"
+        )
+    retained = set(normal_images)
+    retained_indices = tuple(
+        index for index, path in enumerate(input_normal_images) if path in retained
+    )
 
     if args.truth_templates and (args.truth_counts or args.truth_subject_counts):
         raise ValueError(
@@ -653,7 +886,7 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
             for rule in standard_rules
             if rule.task.value in {"COUNT", "LENGTH", "AREA"} and rule.subject
         }
-        subject_counts: dict[str, tuple[int, int, int, int]] = {}
+        subject_counts: dict[str, tuple[int, ...]] = {}
         for raw_values in args.truth_subject_counts:
             subject = raw_values[0]
             if subject in subject_counts:
@@ -664,11 +897,16 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
                     "subject in the standard template"
                 )
             values = tuple(int(value) for value in raw_values[1:])
+            if len(values) != len(input_normal_images):
+                raise ValueError(
+                    f"--truth-subject-counts for {subject!r} needs "
+                    f"{len(input_normal_images)} values, found {len(values)}"
+                )
             if any(value < 0 for value in values):
                 raise ValueError(
                     "inline truth count values must be non-negative integers"
                 )
-            subject_counts[subject] = values  # type: ignore[assignment]
+            subject_counts[subject] = tuple(values[index] for index in retained_indices)
         variable_count_subjects = {
             rule.subject
             for rule in standard_rules
@@ -679,10 +917,7 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
                     rule.expected if rule.task.value == "COUNT" else rule.count,
                     tuple,
                 )
-                and len(
-                    rule.expected if rule.task.value == "COUNT" else rule.count
-                )
-                > 1
+                and len(rule.expected if rule.task.value == "COUNT" else rule.count) > 1
             )
         }
         missing_subjects = sorted(variable_count_subjects - subject_counts.keys())
@@ -693,23 +928,29 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
             )
         truth_rules = tuple(
             tuple(
-                replace(
-                    rule,
-                    expected=(subject_counts[rule.subject][sample_index],)
-                    if rule.task.value == "COUNT"
-                    else rule.expected,
-                    count=(subject_counts[rule.subject][sample_index],)
-                    if rule.task.value in {"LENGTH", "AREA"}
-                    else rule.count,
+                (
+                    replace(
+                        rule,
+                        expected=(
+                            (subject_counts[rule.subject][sample_index],)
+                            if rule.task.value == "COUNT"
+                            else rule.expected
+                        ),
+                        count=(
+                            (subject_counts[rule.subject][sample_index],)
+                            if rule.task.value in {"LENGTH", "AREA"}
+                            else rule.count
+                        ),
+                    )
+                    if (
+                        rule.task.value in {"COUNT", "LENGTH", "AREA"}
+                        and rule.subject in subject_counts
+                    )
+                    else rule
                 )
-                if (
-                    rule.task.value in {"COUNT", "LENGTH", "AREA"}
-                    and rule.subject in subject_counts
-                )
-                else rule
                 for rule in standard_rules
             )
-            for sample_index in range(4)
+            for sample_index in range(len(normal_images))
         )
         truth_paths = None
     elif args.truth_counts:
@@ -723,10 +964,7 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
                     rule.expected if rule.task.value == "COUNT" else rule.count,
                     tuple,
                 )
-                and len(
-                    rule.expected if rule.task.value == "COUNT" else rule.count
-                )
-                > 1
+                and len(rule.expected if rule.task.value == "COUNT" else rule.count) > 1
             )
         }
         if args.truth_subject:
@@ -748,43 +986,61 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
                 "has zero or multiple variable COUNT subjects"
             )
         truth_counts = tuple(int(value) for value in args.truth_counts)
+        if len(truth_counts) != len(input_normal_images):
+            raise ValueError(
+                f"--truth-counts needs {len(input_normal_images)} values, "
+                f"found {len(truth_counts)}"
+            )
         if any(value < 0 for value in truth_counts):
             raise ValueError("--truth-counts values must be non-negative integers")
+        truth_counts = tuple(truth_counts[index] for index in retained_indices)
         truth_rules = tuple(
             tuple(
-                replace(rule, expected=(count,))
-                if rule.task.value == "COUNT" and rule.subject == truth_subject
-                else replace(rule, count=(count,))
-                if rule.task.value in {"LENGTH", "AREA"}
-                and rule.subject == truth_subject
-                else rule
+                (
+                    replace(rule, expected=(count,))
+                    if rule.task.value == "COUNT" and rule.subject == truth_subject
+                    else (
+                        replace(rule, count=(count,))
+                        if rule.task.value in {"LENGTH", "AREA"}
+                        and rule.subject == truth_subject
+                        else rule
+                    )
+                )
                 for rule in standard_rules
             )
             for count in truth_counts
         )
         truth_paths = None
     elif args.truth_templates:
-        truth_paths = tuple(
+        input_truth_paths = tuple(
             Path(path).expanduser().resolve() for path in args.truth_templates
         )
-        missing_templates = [str(path) for path in truth_paths if not path.is_file()]
+        missing_templates = [
+            str(path) for path in input_truth_paths if not path.is_file()
+        ]
         if missing_templates:
             raise ValueError(
                 "truth templates not found: " + ", ".join(missing_templates)
             )
+        if len(input_truth_paths) != len(input_normal_images):
+            raise ValueError(
+                f"--truth-templates needs {len(input_normal_images)} paths, "
+                f"found {len(input_truth_paths)}"
+            )
+        truth_paths = tuple(input_truth_paths[index] for index in retained_indices)
         truth_rules = tuple(
             parse_template(path.read_text(encoding="utf-8"), allow_missing_values=False)
             for path in truth_paths
         )
     else:
-        truth_paths = (Path(standard_path).expanduser().resolve(),) * 4
-        truth_rules = tuple(standard_rules for _ in range(4))
+        truth_paths = (Path(standard_path).expanduser().resolve(),) * len(normal_images)
+        truth_rules = tuple(standard_rules for _ in normal_images)
 
     segmenter = Sam3Segmenter(
         repo_path=args.sam3_repo,
         checkpoint_path=args.sam3_checkpoint,
         device=args.device,
-        confidence_threshold=CALIBRATION_PROPOSAL_THRESHOLD,
+        confidence_threshold=args.sam3_threshold,
         prompt_template=args.sam3_prompt,
     )
     result = calibrate_sam3_thresholds(
@@ -795,21 +1051,29 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
         mask_processor=MaskPostprocessor(
             dedup_iou_threshold=args.mask_dedup_iou,
             dedup_containment_threshold=args.mask_dedup_containment,
-            minimum_area_pixels=args.mask_min_area,
-            cleanup_enabled=args.mask_cleanup,
             dedup_enabled=args.mask_dedup,
         ),
         proposal_threshold=args.sam3_threshold,
-        configuration=_sam3_threshold_configuration(
-            args, standard_path=standard_path
-        ),
+        selection_method=args.threshold_selection_method,
+        configuration=_sam3_threshold_configuration(args, standard_path=standard_path),
         truth_template_paths=truth_paths,
+        progress_callback=progress,
     )
-    output = args.output or str(
-        Path(args.sam3_threshold_policy_root) / f"{class_name}.json"
+    result_path = (
+        Path(args.calibration_result_root).expanduser().resolve()
+        / output.parent.name
+        / f"{class_name}.json"
+    )
+    result["saved_path"] = str(output)
+    result["calibration_result_path"] = str(result_path)
+    saved_result_path = save_sam3_threshold_calibration_result(
+        result,
+        result_path,
     )
     saved_path = save_sam3_threshold_policy(result, output)
+    progress("saved", len(normal_images), len(normal_images), str(saved_path))
     result["saved_path"] = str(saved_path)
+    result["calibration_result_path"] = str(saved_result_path)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] == "complete" else 2
 
@@ -817,19 +1081,16 @@ def _command_calibrate_sam3(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pro-innovation")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
     validate = subparsers.add_parser("validate", help="validate a rule template")
     validate.add_argument("template")
     validate.add_argument("--generic", action="store_true")
     validate.set_defaults(func=_command_validate)
-
     make_generic = subparsers.add_parser(
         "make-generic", help="strip expected values from a standard template"
     )
     make_generic.add_argument("standard")
     make_generic.add_argument("--output")
     make_generic.set_defaults(func=_command_make_generic)
-
     save = subparsers.add_parser(
         "save-standard", help="validate and save a standard/generic template pair"
     )
@@ -838,123 +1099,148 @@ def build_parser() -> argparse.ArgumentParser:
     save.add_argument("--template-root", default="templates/store")
     save.add_argument("--overwrite", action="store_true")
     save.set_defaults(func=_command_save_standard)
-
+    cache_sam3 = subparsers.add_parser(
+        "cache-sam3",
+        help="precompute reusable SAM3 proposals without running rules or DINO",
+    )
+    cache_sam3.add_argument("--class-name", required=True)
+    cache_sam3.add_argument("--dataset", choices=SUPPORTED_DATASETS, default=MVTEC_LOCO)
+    cache_sam3.add_argument("--dataset-base")
+    cache_sam3.add_argument("--dataset-root")
+    cache_sam3.add_argument(
+        "--template-root", default="templates/store"
+    )
+    cache_sam3.add_argument("--generic")
+    cache_sam3.add_argument("--device", default="cuda")
+    cache_sam3.add_argument(
+        "--sam3-threshold",
+        type=_probability_argument,
+        default=CALIBRATION_PROPOSAL_THRESHOLD,
+        help="proposal-generation threshold; 0.20 caches candidates reusable by the current stricter object thresholds",
+    )
+    cache_sam3.add_argument("--sam3-prompt", default="{category}")
+    cache_sam3.add_argument("--sam3-repo", default="models/SAM3")
+    cache_sam3.add_argument(
+        "--sam3-checkpoint", default="weights/sam3/sam3.pt"
+    )
+    cache_sam3.add_argument("--sam3-cache-root", default=DEFAULT_SAM3_CACHE_ROOT)
+    cache_sam3.add_argument(
+        "--test-splits",
+        nargs="+",
+        help="dataset split names to cache; defaults to every official test split",
+    )
+    cache_sam3.add_argument(
+        "--refresh",
+        action="store_true",
+        help="recompute and atomically replace matching cache entries",
+    )
+    cache_sam3.set_defaults(func=_command_cache_sam3)
     build_patch = subparsers.add_parser(
         "build-patch-memory",
-        help=(
-            "build LogSAD DINOv2 Block 6/12/18/24 patch memory from four "
-            "normal images and calibrate it on validation/good"
-        ),
+        help="build a full-normal LogSAD DINOv2 patch coreset and calibrate it with leave-one-image-out normal scores",
     )
     build_patch.add_argument("--class-name", required=True)
-    build_patch.add_argument("--normal-images", nargs=4, required=True)
-    build_patch.add_argument(
-        "--calibration-dir",
-        required=True,
-        help="directory containing the independent normal validation PNG images",
+    patch_normal_source = build_patch.add_mutually_exclusive_group(required=True)
+    patch_normal_source.add_argument("--normal-images", nargs="+")
+    patch_normal_source.add_argument(
+        "--normal-dir", help="directory containing every normal training image"
     )
     build_patch.add_argument("--output")
     build_patch.add_argument(
         "--patch-bank-root",
-        default=str(Path(DEFAULT_PATCH_BANK_ROOT) / MVTEC_LOCO),
+        default=str(Path(DEFAULT_PATCH_BANK_ROOT) / MVTEC_LOCO / "global"),
     )
     build_patch.add_argument("--device", default="cuda")
     build_patch.add_argument(
-        "--patch-dinov2-checkpoint",
-        default=DEFAULT_PATCH_DINOV2_CHECKPOINT,
+        "--patch-dinov2-checkpoint", default=DEFAULT_PATCH_DINOV2_CHECKPOINT
     )
     build_patch.add_argument("--patch-query-batch-size", type=int, default=256)
     build_patch.add_argument("--patch-extraction-batch-size", type=int, default=4)
+    build_patch.add_argument(
+        "--patch-coreset-ratio", type=float, default=DEFAULT_CORESET_RATIO
+    )
+    build_patch.add_argument(
+        "--patch-coreset-seed", type=int, default=DEFAULT_CORESET_SEED
+    )
     build_patch.set_defaults(func=_command_build_patch_memory)
-
     calibrate_sam3 = subparsers.add_parser(
         "calibrate-sam3-thresholds",
-        help=(
-            "derive and save fixed per-object SAM3 thresholds from exactly "
-            "four normal truth samples"
-        ),
+        help="derive fixed per-object SAM3 thresholds from all train/good images",
     )
     calibrate_sam3.add_argument("--class-name", required=True)
-    calibrate_sam3.add_argument("--normal-images", nargs=4, required=True)
+    calibrate_normal_source = calibrate_sam3.add_mutually_exclusive_group(required=True)
+    calibrate_normal_source.add_argument("--normal-images", nargs="+")
+    calibrate_normal_source.add_argument(
+        "--normal-dir", help="directory containing all train/good calibration images"
+    )
     calibrate_sam3.add_argument(
         "--truth-templates",
-        nargs=4,
-        help=(
-            "four sample-specific concrete templates; required when the shared "
-            "standard template contains multiple allowed COUNT values"
-        ),
+        nargs="+",
+        help="optional sample-specific concrete templates, one per normal image",
     )
     calibrate_sam3.add_argument(
         "--truth-counts",
-        nargs=4,
+        nargs="+",
         type=int,
-        help=(
-            "four per-image COUNT truths; expands a variable COUNT rule in memory "
-            "without requiring sample-specific template files"
-        ),
+        help="per-image COUNT truths; expands a variable COUNT rule in memory without requiring sample-specific template files",
     )
     calibrate_sam3.add_argument(
-        "--truth-subject",
-        help="COUNT subject to replace when --truth-counts is used",
+        "--truth-subject", help="COUNT subject to replace when --truth-counts is used"
     )
     calibrate_sam3.add_argument(
         "--truth-subject-counts",
-        nargs=5,
+        nargs="+",
         action="append",
-        metavar=("SUBJECT", "K1", "K2", "K3", "K4"),
-        help=(
-            "repeatable per-subject inline truths, for example "
-            "--truth-subject-counts orange_clip 4 6 10 10"
-        ),
+        metavar="SUBJECT_OR_COUNT",
+        help="repeatable SUBJECT followed by one count per normal image",
     )
     calibrate_sam3.add_argument(
-        "--template-root",
-        default="/home/lxq/pro-innovation/templates/store",
+        "--template-root", default="templates/store"
     )
     calibrate_sam3.add_argument("--standard")
     calibrate_sam3.add_argument("--output")
     calibrate_sam3.add_argument(
-        "--sam3-threshold-policy-root",
-        default=DEFAULT_SAM3_THRESHOLD_POLICY_ROOT,
+        "--calibration-result-root",
+        default=DEFAULT_SAM3_THRESHOLD_RESULT_ROOT,
+        help="directory for full calibration reports; runtime policy stays minimal",
+    )
+    calibrate_sam3.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="explicitly allow replacing an existing threshold policy",
+    )
+    calibrate_sam3.add_argument(
+        "--sam3-threshold-policy-root", default=DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT
     )
     calibrate_sam3.add_argument("--device", default="cuda")
     calibrate_sam3.add_argument(
         "--sam3-threshold",
         type=_probability_argument,
         default=CALIBRATION_PROPOSAL_THRESHOLD,
-        help=(
-            "candidate-generation threshold for calibration in [0, 1] "
-            "(default: 0.10)"
-        ),
-    )
-    calibrate_sam3.add_argument("--mask-dedup-iou", type=float, default=0.80)
-    calibrate_sam3.add_argument(
-        "--mask-dedup-containment", type=float, default=0.85
-    )
-    calibrate_sam3.add_argument("--mask-min-area", type=int, default=16)
-    calibrate_sam3.add_argument(
-        "--mask-dedup",
-        action=argparse.BooleanOptionalAction,
-        default=True,
+        help="candidate-generation threshold for calibration in [0, 1] (default: 0.20)",
     )
     calibrate_sam3.add_argument(
-        "--mask-cleanup",
-        action=argparse.BooleanOptionalAction,
-        default=True,
+        "--threshold-selection-method",
+        choices=CALIBRATION_SELECTION_METHODS,
+        default="confidence_gap_midpoint",
+        help="confidence_gap_midpoint computes the Q95/Q05 interval midpoint and rounds it downward to the 0.10 grid",
+    )
+    calibrate_sam3.add_argument("--mask-dedup-iou", type=float, default=0.8)
+    calibrate_sam3.add_argument("--mask-dedup-containment", type=float, default=0.85)
+    calibrate_sam3.add_argument(
+        "--mask-dedup", action=argparse.BooleanOptionalAction, default=True
     )
     calibrate_sam3.add_argument("--sam3-prompt", default="{category}")
-    calibrate_sam3.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
+    calibrate_sam3.add_argument("--sam3-repo", default="models/SAM3")
     calibrate_sam3.add_argument(
-        "--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt"
+        "--sam3-checkpoint", default="weights/sam3/sam3.pt"
     )
     calibrate_sam3.set_defaults(func=_command_calibrate_sam3)
-
     infer = subparsers.add_parser(
         "infer", help="run local SAM3 rules with optional Patch matching"
     )
     infer.add_argument(
-        "--class-name",
-        help="class identity used to select the default Patch bank",
+        "--class-name", help="class identity used to select the default Patch bank"
     )
     infer.add_argument("--image", required=True)
     infer.add_argument("--generic")
@@ -962,76 +1248,54 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--output")
     infer.add_argument("--attribute-vocabulary")
     infer.add_argument("--device", default="cuda")
-    infer.add_argument("--grouping-tolerance", type=float, default=0.10)
-    infer.add_argument("--sam3-threshold", type=float, default=0.40)
-    infer.add_argument("--mask-dedup-iou", type=float, default=0.80)
+    infer.add_argument("--grouping-tolerance", type=float, default=0.1)
+    infer.add_argument("--sam3-threshold", type=float, default=0.4)
+    infer.add_argument("--mask-dedup-iou", type=float, default=0.8)
     infer.add_argument("--mask-dedup-containment", type=float, default=0.85)
-    infer.add_argument("--mask-min-area", type=int, default=16)
     infer.add_argument(
         "--mask-dedup",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="enable or disable same-category duplicate-mask suppression",
     )
-    infer.add_argument(
-        "--mask-cleanup",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="enable or disable largest-component cleanup and minimum-area filtering",
-    )
     infer.add_argument("--sam3-prompt", default="{category}")
-    infer.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
-    infer.add_argument("--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt")
+    infer.add_argument("--sam3-repo", default="models/SAM3")
+    infer.add_argument("--sam3-checkpoint", default="weights/sam3/sam3.pt")
     _add_sam3_threshold_runtime_arguments(infer)
-    infer.add_argument("--clip-repo", default="/home/lxq/models/CLIP")
+    _add_sam3_cache_runtime_arguments(infer)
+    infer.add_argument("--clip-repo", default="models/CLIP")
     infer.add_argument(
-        "--clip-checkpoint", default="/home/lxq/weights/CLIP/ViT-L-14.pt"
+        "--clip-checkpoint", default="weights/CLIP/ViT-L-14.pt"
     )
     infer.add_argument(
         "--clip-threshold",
         type=float,
         default=0.35,
-        help=(
-            "minimum confidence for CLIP semantic-attribute predictions; "
-            "this does not enable SAM3 mask category verification"
-        ),
+        help="minimum confidence for CLIP semantic-attribute predictions; this does not enable SAM3 mask category verification",
     )
     _add_patch_runtime_arguments(infer)
     _add_rule_runtime_arguments(infer)
     infer.set_defaults(func=_command_infer)
-
     evaluate_generic = subparsers.add_parser(
-        "evaluate",
-        help="evaluate a MVTec LOCO, MVTec AD, or VisA class",
+        "evaluate", help="evaluate a MVTec LOCO, MVTec AD, or VisA class"
     )
     evaluate_generic.add_argument("--class-name", required=True)
     evaluate_generic.add_argument(
         "--dataset",
         choices=SUPPORTED_DATASETS,
         default=MVTEC_LOCO,
-        help=(
-            "dataset layout: mvtec_loco uses fixed logical/structural splits; "
-            "mvtec_ad discovers every non-good defect folder; visa reads the "
-            "official split_csv/1cls.csv test rows"
-        ),
+        help="dataset layout: mvtec_loco uses fixed logical/structural splits; mvtec_ad discovers every non-good defect folder; visa reads the official split_csv/1cls.csv test rows",
     )
     evaluate_generic.add_argument(
         "--dataset-base",
-        help=(
-            "dataset root containing one directory per class; defaults to the "
-            "project datasets symlink selected by --dataset"
-        ),
+        help="dataset root containing one directory per class; defaults to the project datasets symlink selected by --dataset",
     )
     evaluate_generic.add_argument(
         "--dataset-root",
-        help=(
-            "override the dataset path; for VisA this is the root containing "
-            "split_csv, otherwise <dataset-base>/<class-name>/test"
-        ),
+        help="override the dataset path; for VisA this is the root containing split_csv, otherwise <dataset-base>/<class-name>/test",
     )
     evaluate_generic.add_argument(
-        "--template-root",
-        default="/home/lxq/pro-innovation/templates/store",
+        "--template-root", default="templates/store"
     )
     evaluate_generic.add_argument(
         "--generic",
@@ -1042,47 +1306,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the default <template-root>/<class-name>.standard.rules",
     )
     evaluate_generic.add_argument(
-        "--result-root", default="/home/lxq/pro-innovation/result"
+        "--result-root", default="result"
     )
     evaluate_generic.add_argument("--attribute-vocabulary")
     evaluate_generic.add_argument("--device", default="cuda")
-    evaluate_generic.add_argument("--grouping-tolerance", type=float, default=0.10)
-    evaluate_generic.add_argument("--sam3-threshold", type=float, default=0.40)
-    evaluate_generic.add_argument("--mask-dedup-iou", type=float, default=0.80)
-    evaluate_generic.add_argument(
-        "--mask-dedup-containment", type=float, default=0.85
-    )
-    evaluate_generic.add_argument("--mask-min-area", type=int, default=16)
+    evaluate_generic.add_argument("--grouping-tolerance", type=float, default=0.1)
+    evaluate_generic.add_argument("--sam3-threshold", type=float, default=0.4)
+    evaluate_generic.add_argument("--mask-dedup-iou", type=float, default=0.8)
+    evaluate_generic.add_argument("--mask-dedup-containment", type=float, default=0.85)
     evaluate_generic.add_argument(
         "--mask-dedup",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="enable or disable same-category duplicate-mask suppression",
     )
-    evaluate_generic.add_argument(
-        "--mask-cleanup",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="enable or disable largest-component cleanup and minimum-area filtering",
-    )
     evaluate_generic.add_argument("--sam3-prompt", default="{category}")
-    evaluate_generic.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
+    evaluate_generic.add_argument("--sam3-repo", default="models/SAM3")
     evaluate_generic.add_argument(
-        "--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt"
+        "--sam3-checkpoint", default="weights/sam3/sam3.pt"
     )
     _add_sam3_threshold_runtime_arguments(evaluate_generic)
-    evaluate_generic.add_argument("--clip-repo", default="/home/lxq/models/CLIP")
+    _add_sam3_cache_runtime_arguments(evaluate_generic)
+    evaluate_generic.add_argument("--clip-repo", default="models/CLIP")
     evaluate_generic.add_argument(
-        "--clip-checkpoint", default="/home/lxq/weights/CLIP/ViT-L-14.pt"
+        "--clip-checkpoint", default="weights/CLIP/ViT-L-14.pt"
     )
     evaluate_generic.add_argument(
         "--clip-threshold",
         type=float,
         default=0.35,
-        help=(
-            "minimum confidence for CLIP semantic-attribute predictions; "
-            "this does not enable SAM3 mask category verification"
-        ),
+        help="minimum confidence for CLIP semantic-attribute predictions; this does not enable SAM3 mask category verification",
     )
     _add_patch_runtime_arguments(evaluate_generic)
     _add_rule_runtime_arguments(evaluate_generic)
@@ -1093,8 +1346,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="discard the parameter-matched progress file and run from the start",
     )
     evaluate_generic.add_argument(
-        "--test-split",
-        help="evaluate only one test folder; models are loaded once",
+        "--test-split", help="evaluate only one test folder; models are loaded once"
     )
     evaluate_generic.add_argument(
         "--test-splits",
@@ -1102,63 +1354,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="evaluate the selected test folders; models are loaded once",
     )
     evaluate_generic.set_defaults(func=_command_evaluate)
-
     evaluate = subparsers.add_parser(
         "evaluate-screw-bag",
         help="evaluate screw_bag with optional Patch matching and compute AUROC",
     )
     evaluate.add_argument(
         "--dataset-root",
-        default="/home/lxq/Data/mvtec_loco_anomaly_detection/screw_bag/test",
+        default="datasets/mvtec_loco_anomaly_detection/screw_bag/test",
     )
     evaluate.add_argument(
         "--generic",
-        default="/home/lxq/pro-innovation/templates/store/screw_bag.generic.rules",
+        default="templates/store/screw_bag.generic.rules",
     )
     evaluate.add_argument(
         "--standard",
-        default="/home/lxq/pro-innovation/templates/store/screw_bag.standard.rules",
+        default="templates/store/screw_bag.standard.rules",
     )
-    evaluate.add_argument(
-        "--result-root", default="/home/lxq/pro-innovation/result"
-    )
+    evaluate.add_argument("--result-root", default="result")
     evaluate.add_argument("--device", default="cuda")
-    evaluate.add_argument("--sam3-threshold", type=float, default=0.40)
-    evaluate.add_argument("--mask-dedup-iou", type=float, default=0.80)
-    evaluate.add_argument(
-        "--mask-dedup-containment", type=float, default=0.85
-    )
-    evaluate.add_argument("--mask-min-area", type=int, default=16)
+    evaluate.add_argument("--sam3-threshold", type=float, default=0.4)
+    evaluate.add_argument("--mask-dedup-iou", type=float, default=0.8)
+    evaluate.add_argument("--mask-dedup-containment", type=float, default=0.85)
     evaluate.add_argument(
         "--mask-dedup",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="enable or disable same-category duplicate-mask suppression",
     )
-    evaluate.add_argument(
-        "--mask-cleanup",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="enable or disable largest-component cleanup and minimum-area filtering",
-    )
-    evaluate.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
-    evaluate.add_argument(
-        "--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt"
-    )
+    evaluate.add_argument("--sam3-repo", default="models/SAM3")
+    evaluate.add_argument("--sam3-checkpoint", default="weights/sam3/sam3.pt")
     evaluate.add_argument("--sam3-prompt", default="{category}")
     _add_sam3_threshold_runtime_arguments(evaluate)
-    evaluate.add_argument("--clip-repo", default="/home/lxq/models/CLIP")
+    _add_sam3_cache_runtime_arguments(evaluate)
+    evaluate.add_argument("--clip-repo", default="models/CLIP")
     evaluate.add_argument(
-        "--clip-checkpoint", default="/home/lxq/weights/CLIP/ViT-L-14.pt"
+        "--clip-checkpoint", default="weights/CLIP/ViT-L-14.pt"
     )
     evaluate.add_argument(
         "--clip-threshold",
         type=float,
         default=0.35,
-        help=(
-            "minimum confidence for CLIP semantic-attribute predictions; "
-            "this does not enable SAM3 mask category verification"
-        ),
+        help="minimum confidence for CLIP semantic-attribute predictions; this does not enable SAM3 mask category verification",
     )
     _add_patch_runtime_arguments(evaluate)
     _add_rule_runtime_arguments(evaluate)

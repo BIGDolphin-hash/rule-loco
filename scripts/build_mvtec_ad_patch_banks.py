@@ -10,7 +10,9 @@ from pathlib import Path
 import subprocess
 import sys
 
-from pro_innovation.patch_memory import (
+from PIL import Image
+
+from pro_innovation.memory_modules.global_patch import (
     DEFAULT_PATCH_DINOV2_CHECKPOINT,
     PatchMemoryBank,
     patch_memory_run_tag,
@@ -20,66 +22,29 @@ from pro_innovation.errors import MemoryBankError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_ROOT = PROJECT_ROOT / "datasets" / "mvtec_anomaly_detection"
-DEFAULT_CALIBRATION_ROOT = PROJECT_ROOT / "datasets" / "mvtec_ad_calibration"
-DEFAULT_BANK_ROOT = PROJECT_ROOT / "memory_banks" / "4-shot" / "mvtec_ad"
+DEFAULT_BANK_ROOT = (
+    PROJECT_ROOT / "memory_banks" / "Global patch" / "full" / "mvtec_ad" / "global"
+)
 DEFAULT_MANIFEST = PROJECT_ROOT / "config" / "mvtec_ad_patch_selection.json"
-MEMORY_COUNT = 4
-CALIBRATION_COUNT = 16
 
 
-def _stratum_centers(length: int, count: int) -> tuple[int, ...]:
-    if length < count:
-        raise ValueError(f"cannot select {count} distinct items from {length}")
-    return tuple(round((index + 0.5) * length / count - 0.5) for index in range(count))
-
-
-def _select_images(train_good: Path) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    images = tuple(sorted(train_good.glob("*.png")))
-    memory_indices = _stratum_centers(len(images), MEMORY_COUNT)
-    memory_images = tuple(images[index].resolve() for index in memory_indices)
-    remaining = tuple(
-        image for index, image in enumerate(images) if index not in memory_indices
-    )
-    calibration_images = tuple(
-        remaining[index].resolve()
-        for index in _stratum_centers(len(remaining), CALIBRATION_COUNT)
-    )
-    if set(memory_images) & set(calibration_images):
-        raise RuntimeError(f"memory/calibration overlap under {train_good}")
-    return memory_images, calibration_images
-
-
-def _ensure_calibration_view(
-    category: str,
-    sources: tuple[Path, ...],
-    calibration_root: Path,
-) -> Path:
-    destination = calibration_root / category / "good"
-    destination.mkdir(parents=True, exist_ok=True)
-    expected_names = {source.name for source in sources}
-    unexpected = [path for path in destination.iterdir() if path.name not in expected_names]
-    if unexpected:
-        raise RuntimeError(
-            f"unexpected entries in calibration view {destination}: "
-            + ", ".join(str(path) for path in unexpected)
-        )
-    for source in sources:
-        link = destination / source.name
-        if link.is_symlink():
-            if link.resolve() != source:
-                raise RuntimeError(f"calibration symlink points elsewhere: {link}")
+def _readable_images(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    readable: list[Path] = []
+    for path in paths:
+        try:
+            with Image.open(path) as image:
+                image.load()
+        except Exception as exc:
+            print(f"skip unreadable training image {path}: {exc}", flush=True)
             continue
-        if link.exists():
-            raise RuntimeError(f"calibration entry is not a symlink: {link}")
-        link.symlink_to(source)
-    return destination
+        readable.append(path)
+    return tuple(readable)
 
 
 def _bank_matches_selection(
     bank_path: Path,
     category: str,
     memory_images: tuple[Path, ...],
-    calibration_images: tuple[Path, ...],
     checkpoint: Path,
 ) -> bool:
     if not bank_path.is_file():
@@ -92,19 +57,13 @@ def _bank_matches_selection(
         )
     except MemoryBankError:
         return False
-    return (
-        tuple(bank.normal_images) == tuple(str(path) for path in memory_images)
-        and tuple(bank.calibration_images)
-        == tuple(str(path) for path in calibration_images)
-    )
+    expected = tuple(str(path) for path in memory_images)
+    return tuple(bank.normal_images) == expected and tuple(bank.calibration_images) == expected
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
-    parser.add_argument(
-        "--calibration-root", type=Path, default=DEFAULT_CALIBRATION_ROOT
-    )
     parser.add_argument("--bank-root", type=Path, default=DEFAULT_BANK_ROOT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument(
@@ -117,7 +76,6 @@ def main() -> int:
     args = parser.parse_args()
 
     dataset_root = args.dataset_root.expanduser().resolve()
-    calibration_root = args.calibration_root.expanduser().resolve()
     bank_root = args.bank_root.expanduser().resolve()
     checkpoint = args.checkpoint.expanduser().resolve()
     available = sorted(path.name for path in dataset_root.iterdir() if path.is_dir())
@@ -129,30 +87,28 @@ def main() -> int:
         raise FileNotFoundError(checkpoint)
 
     selections: dict[str, dict[str, object]] = {}
-    prepared: dict[str, tuple[tuple[Path, ...], tuple[Path, ...], Path]] = {}
+    prepared: dict[str, tuple[tuple[Path, ...], Path, Path]] = {}
     for category in categories:
         train_good = dataset_root / category / "train" / "good"
-        memory_images, calibration_images = _select_images(train_good)
-        calibration_dir = _ensure_calibration_view(
-            category, calibration_images, calibration_root
+        memory_images = _readable_images(
+            tuple(path.resolve() for path in sorted(train_good.glob("*.png")))
         )
+        if len(memory_images) < 2:
+            raise ValueError(f"not enough normal images under {train_good}")
         bank_path = bank_root / f"{category}.{patch_memory_run_tag()}.npz"
-        prepared[category] = (memory_images, calibration_images, bank_path)
+        prepared[category] = (memory_images, train_good, bank_path)
         selections[category] = {
-            "train_good_count": len(tuple(train_good.glob("*.png"))),
-            "selection_strategy": "sorted_filename_stratum_centers",
+            "train_good_count": len(memory_images),
+            "selection_strategy": "all_train_good_with_patch_coreset",
             "normal_images": [str(path) for path in memory_images],
-            "calibration_images": [str(path) for path in calibration_images],
-            "calibration_view": str(calibration_dir),
+            "calibration_strategy": "all_train_good_leave_one_image_out",
             "patch_bank": str(bank_path),
         }
 
     manifest = {
-        "schema": "pro-innovation.mvtec-ad-patch-selection.v1",
+        "schema": "pro-innovation.mvtec-ad-full-coreset-selection.v1",
         "dataset_root": str(dataset_root),
         "checkpoint": str(checkpoint),
-        "memory_images_per_class": MEMORY_COUNT,
-        "calibration_images_per_class": CALIBRATION_COUNT,
         "classes": selections,
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -173,12 +129,11 @@ def main() -> int:
         else source_root + os.pathsep + environment["PYTHONPATH"]
     )
     for index, category in enumerate(categories, start=1):
-        memory_images, calibration_images, bank_path = prepared[category]
+        memory_images, train_good, bank_path = prepared[category]
         if _bank_matches_selection(
             bank_path,
             category,
             memory_images,
-            calibration_images,
             checkpoint,
         ):
             print(f"[{index}/{len(categories)}] skip verified {category}", flush=True)
@@ -194,10 +149,8 @@ def main() -> int:
             "build-patch-memory",
             "--class-name",
             category,
-            "--normal-images",
-            *(str(path) for path in memory_images),
-            "--calibration-dir",
-            str(calibration_root / category / "good"),
+            "--normal-dir",
+            str(train_good),
             "--output",
             str(bank_path),
             "--patch-dinov2-checkpoint",
@@ -217,7 +170,6 @@ def main() -> int:
                 bank_path,
                 category,
                 memory_images,
-                calibration_images,
                 checkpoint,
             )
             if bank_valid:

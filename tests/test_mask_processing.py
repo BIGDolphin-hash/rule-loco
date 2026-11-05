@@ -6,7 +6,6 @@ import numpy as np
 
 from pro_innovation.mask_processing import (
     MaskPostprocessor,
-    largest_connected_component,
     mask_containment,
     mask_iou,
 )
@@ -18,13 +17,16 @@ def instance(mask: np.ndarray, score: float) -> MaskInstance:
 
 
 class MaskProcessingTests(unittest.TestCase):
-    def test_largest_component_removes_detached_pixels(self) -> None:
-        mask = np.zeros((12, 12), dtype=bool)
-        mask[2:5, 2:7] = True
-        mask[10, 10] = True
-        cleaned = largest_connected_component(mask)
-        self.assertEqual(int(cleaned.sum()), 15)
-        self.assertFalse(cleaned[10, 10])
+    def test_mask_instance_owns_a_contiguous_copy(self) -> None:
+        source = np.zeros((6, 8), dtype=bool)
+        source[1:5, 2:6] = True
+        view = source[:, ::2]
+
+        owned = MaskInstance(view)
+        source[:, :] = False
+
+        self.assertTrue(owned.mask.flags.c_contiguous)
+        self.assertEqual(int(owned.mask.sum()), 8)
 
     def test_iou(self) -> None:
         left = np.zeros((8, 8), dtype=bool)
@@ -46,7 +48,6 @@ class MaskProcessingTests(unittest.TestCase):
         processor = MaskPostprocessor(
             dedup_iou_threshold=0.80,
             dedup_containment_threshold=0.85,
-            minimum_area_pixels=1,
         )
         result = processor.process(
             ("fruit_icon",),
@@ -71,7 +72,6 @@ class MaskProcessingTests(unittest.TestCase):
 
         processor = MaskPostprocessor(
             dedup_iou_threshold=0.80,
-            minimum_area_pixels=1,
         )
         result = processor.process(
             ("screw",),
@@ -90,7 +90,7 @@ class MaskProcessingTests(unittest.TestCase):
     def test_never_deduplicates_across_categories(self) -> None:
         shared = np.zeros((10, 10), dtype=bool)
         shared[2:8, 2:8] = True
-        processor = MaskPostprocessor(minimum_area_pixels=1)
+        processor = MaskPostprocessor()
         result = processor.process(
             ("screw", "nut"),
             {
@@ -101,34 +101,32 @@ class MaskProcessingTests(unittest.TestCase):
         self.assertEqual(len(result["screw"]), 1)
         self.assertEqual(len(result["nut"]), 1)
 
-    def test_cleanup_can_be_disabled_for_ablation(self) -> None:
+    def test_original_mask_and_box_are_preserved(self) -> None:
         dirty = np.zeros((12, 12), dtype=bool)
         dirty[2:5, 2:7] = True
         dirty[10, 10] = True
-        tiny = np.zeros((12, 12), dtype=bool)
-        tiny[0, 0] = True
-        processor = MaskPostprocessor(
-            minimum_area_pixels=16,
-            cleanup_enabled=False,
-            dedup_enabled=False,
+        original = MaskInstance(
+            dirty,
+            score=0.90,
+            box=(2.0, 2.0, 7.0, 5.0),
         )
+        processor = MaskPostprocessor(dedup_enabled=False)
 
         result = processor.process(
             ("screw",),
-            {"screw": (instance(dirty, 0.90), instance(tiny, 0.80))},
+            {"screw": (original,)},
         )
 
-        self.assertEqual(len(result["screw"]), 2)
+        self.assertEqual(len(result["screw"]), 1)
+        self.assertEqual(int(result["screw"][0].mask.sum()), 16)
         self.assertTrue(result["screw"][0].mask[10, 10])
+        self.assertEqual(result["screw"][0].box, original.box)
+        self.assertIs(result["screw"][0], original)
 
     def test_deduplication_can_be_disabled_for_ablation(self) -> None:
         duplicate = np.zeros((12, 12), dtype=bool)
         duplicate[2:7, 2:7] = True
-        processor = MaskPostprocessor(
-            minimum_area_pixels=1,
-            cleanup_enabled=True,
-            dedup_enabled=False,
-        )
+        processor = MaskPostprocessor(dedup_enabled=False)
 
         result = processor.process(
             ("screw",),

@@ -59,7 +59,7 @@ def validate_color_candidates(
 def _as_rgb_array(image: Any) -> np.ndarray:
     if isinstance(image, (str, Path)):
         with Image.open(image) as opened:
-            return np.asarray(opened.convert("RGB"))
+            return np.asarray(opened.convert("RGB")).copy()
     if isinstance(image, Image.Image):
         return np.asarray(image.convert("RGB"))
     array = np.asarray(image)

@@ -1,0 +1,13 @@
+{
+  "selected_thresholds": {
+    "pushpin": 0.70,
+    "square_compartment": 0.60
+  },
+  "calibration_images": [
+    "datasets/mvtec_loco_anomaly_detection/pushpins/train/good/012.png",
+    "datasets/mvtec_loco_anomaly_detection/pushpins/train/good/017.png",
+    "datasets/mvtec_loco_anomaly_detection/pushpins/train/good/022.png",
+    "datasets/mvtec_loco_anomaly_detection/pushpins/train/good/025.png"
+  ],
+  "initial_threshold": 0.60
+}

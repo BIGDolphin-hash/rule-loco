@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pro-innovation"
 version = "0.1.0"
-description = "Template-driven rules and GPO-JM anomaly detection"
+description = "Rule-guided visual anomaly detection with CASTJM and Global Patch memories"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

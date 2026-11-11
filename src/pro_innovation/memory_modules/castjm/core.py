@@ -1,7 +1,7 @@
-"""GPO-JM memory construction, persistence, and runtime scoring.
+"""CASTJM memory construction, persistence, and runtime scoring.
 
 Global Patch supplies intermediate texture statistics only; it does not emit a
-second image-level score in this module.  GPO-JM owns every descriptor and
+second image-level score in this module.  CASTJM owns every descriptor and
 runtime dependency used by the joint memory.
 """
 
@@ -26,17 +26,17 @@ from ...adapters.patch_dinov2 import (
 )
 from ...errors import MemoryBankError
 from ...models import MaskInstance
-from .global_patch import GPOJMGlobalPatchBank
+from .global_patch import CASTJMGlobalPatchBank
 from .pixel_texture import (
     GlobalPatchPixelLocalization,
     GlobalPatchPixelLocalizer,
 )
 from .semantic import category_only_embedding
 
-GLOBAL_PATCH_ORDERED_MEMORY_SCHEMA = (
-    "pro-innovation-global-patch-ordered-joint-memory-v1"
+CASTJM_MEMORY_SCHEMA = (
+    "pro-innovation-castjm-joint-memory-v1"
 )
-GLOBAL_PATCH_ORDERED_MODE = "global_patch_ordered_joint"
+CASTJM_MODE = "castjm_joint"
 BACKGROUND_BLOCK = "__background__"
 DEFAULT_TEXTURE_WEIGHT = 0.30
 DEFAULT_TOP_FRACTION = 0.10
@@ -44,7 +44,7 @@ STANDARDIZATION_EPSILON = 1e-10
 
 
 @dataclass(frozen=True)
-class GlobalPatchOrderedEvidence:
+class CASTJMEvidence:
     """The one and only score emitted by the joint ordered memory."""
 
     aggregate_raw_score: float
@@ -58,7 +58,7 @@ class GlobalPatchOrderedEvidence:
     texture_distances: Mapping[str, float]
     texture_statistics: Mapping[str, tuple[float, float, float]]
     bank_path: str | None = None
-    mode: str = GLOBAL_PATCH_ORDERED_MODE
+    mode: str = CASTJM_MODE
 
 
 def _mask_on_feature_grid(
@@ -108,7 +108,7 @@ def global_patch_texture_signature(
     ordered = tuple(str(category) for category in categories)
     if not ordered or len(set(ordered)) != len(ordered):
         raise MemoryBankError(
-            "ordered Global Patch categories must be unique and non-empty"
+            "CASTJM categories must be unique and non-empty"
         )
     if not isfinite(float(top_fraction)) or not 0.0 < float(top_fraction) <= 1.0:
         raise ValueError("Global Patch top fraction must be in (0, 1]")
@@ -161,7 +161,7 @@ def _joint_distances(
     return joint, torch.sqrt(category_squared), torch.sqrt(texture_squared)
 
 
-class GlobalPatchOrderedMemoryBank:
+class CASTJMMemoryBank:
     """One ordered joint memory containing category and Global Patch blocks."""
 
     def __init__(
@@ -212,9 +212,9 @@ class GlobalPatchOrderedMemoryBank:
         count = len(self.normal_images)
         category_count = len(self.categories)
         if not self.class_name or not self.categories:
-            raise MemoryBankError("ordered Global Patch identity is empty")
+            raise MemoryBankError("CASTJM identity is empty")
         if len(set(self.categories)) != category_count:
-            raise MemoryBankError("ordered Global Patch categories must be unique")
+            raise MemoryBankError("CASTJM categories must be unique")
         if self.category_memory.ndim != 3 or self.category_memory.shape[:2] != (
             count,
             category_count,
@@ -223,7 +223,7 @@ class GlobalPatchOrderedMemoryBank:
         if self.texture_memory.shape != (count, category_count + 1, 3):
             raise MemoryBankError("ordered texture memory has an invalid shape")
         if count < 2 or len(set(self.normal_images)) != count:
-            raise MemoryBankError("ordered Global Patch memory needs distinct images")
+            raise MemoryBankError("CASTJM memory needs distinct images")
         if not all(
             torch.isfinite(value).all()
             for value in (
@@ -235,7 +235,7 @@ class GlobalPatchOrderedMemoryBank:
                 self.texture_std,
             )
         ):
-            raise MemoryBankError("ordered Global Patch memory is non-finite")
+            raise MemoryBankError("CASTJM memory is non-finite")
         category_dimension = int(self.category_memory.shape[2])
         if self.category_mean.shape != (category_count, category_dimension):
             raise MemoryBankError("ordered category mean has an invalid shape")
@@ -246,9 +246,9 @@ class GlobalPatchOrderedMemoryBank:
         if self.texture_std.shape != self.texture_mean.shape:
             raise MemoryBankError("ordered texture std has an invalid shape")
         if (self.category_std < 0).any() or (self.texture_std < 0).any():
-            raise MemoryBankError("ordered Global Patch std is negative")
+            raise MemoryBankError("CASTJM std is negative")
         if not isfinite(self.loo_max_distance) or self.loo_max_distance <= 0.0:
-            raise MemoryBankError("ordered Global Patch LOO scale must be positive")
+            raise MemoryBankError("CASTJM LOO scale must be positive")
         if not 0.0 <= self.texture_weight <= 1.0:
             raise MemoryBankError("texture weight must be in [0, 1]")
         if not 0.0 < self.top_fraction <= 1.0:
@@ -263,12 +263,12 @@ class GlobalPatchOrderedMemoryBank:
         features: Sequence[PatchFeatureBundle],
         mask_pools: Sequence[Mapping[str, Sequence[MaskInstance]]],
         normal_images: Sequence[str | Path],
-        global_patch_bank: GPOJMGlobalPatchBank,
+        global_patch_bank: CASTJMGlobalPatchBank,
         device: str,
         query_batch_size: int = 256,
         texture_weight: float = DEFAULT_TEXTURE_WEIGHT,
         top_fraction: float = DEFAULT_TOP_FRACTION,
-    ) -> "GlobalPatchOrderedMemoryBank":
+    ) -> "CASTJMMemoryBank":
         if len(features) != len(mask_pools) or len(features) != len(normal_images):
             raise ValueError("ordered features, masks, and images must align")
         resolved_images = tuple(
@@ -334,7 +334,7 @@ class GlobalPatchOrderedMemoryBank:
         feature_grid: tuple[int, int],
         texture_weight: float = DEFAULT_TEXTURE_WEIGHT,
         top_fraction: float = DEFAULT_TOP_FRACTION,
-    ) -> "GlobalPatchOrderedMemoryBank":
+    ) -> "CASTJMMemoryBank":
         category_raw = category_features.detach().float().cpu()
         texture_raw = texture_features.detach().float().cpu()
         if category_raw.ndim != 3 or texture_raw.ndim != 3:
@@ -388,10 +388,10 @@ class GlobalPatchOrderedMemoryBank:
         features: PatchFeatureBundle,
         mask_pool: Mapping[str, Sequence[MaskInstance]],
         anomaly_map: torch.Tensor,
-    ) -> GlobalPatchOrderedEvidence:
+    ) -> CASTJMEvidence:
         if tuple(features.feature_grid) != self.feature_grid:
             raise MemoryBankError(
-                "query feature grid does not match ordered Global Patch memory"
+                "query feature grid does not match CASTJM memory"
             )
         vector, slices = category_only_embedding(features, mask_pool, self.categories)
         category_raw = torch.stack(
@@ -421,7 +421,7 @@ class GlobalPatchOrderedMemoryBank:
         raw_score = float(distances[nearest].item())
         ratio = raw_score / self.loo_max_distance
         texture_labels = (*self.categories, BACKGROUND_BLOCK)
-        return GlobalPatchOrderedEvidence(
+        return CASTJMEvidence(
             aggregate_raw_score=raw_score,
             threshold=self.loo_max_distance,
             adaptive_score=ratio,
@@ -445,8 +445,8 @@ class GlobalPatchOrderedMemoryBank:
         destination = Path(path).expanduser().resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
         metadata = {
-            "schema": GLOBAL_PATCH_ORDERED_MEMORY_SCHEMA,
-            "mode": GLOBAL_PATCH_ORDERED_MODE,
+            "schema": CASTJM_MEMORY_SCHEMA,
+            "mode": CASTJM_MODE,
             "class_name": self.class_name,
             "categories": list(self.categories),
             "normal_images": list(self.normal_images),
@@ -459,7 +459,7 @@ class GlobalPatchOrderedMemoryBank:
             "top_fraction": self.top_fraction,
             "texture_weight": self.texture_weight,
             "loo_max_distance": self.loo_max_distance,
-            "matching": "ordered_joint_category_texture_1nn",
+            "matching": "castjm_category_texture_1nn",
             "score_count": 1,
         }
         descriptor, temporary_name = tempfile.mkstemp(
@@ -498,13 +498,13 @@ class GlobalPatchOrderedMemoryBank:
         expected_categories: Sequence[str] | None = None,
         expected_checkpoint_path: str | Path | None = None,
         expected_global_patch_bank_path: str | Path | None = None,
-    ) -> "GlobalPatchOrderedMemoryBank":
+    ) -> "CASTJMMemoryBank":
         source = Path(path).expanduser().resolve()
         try:
             with np.load(source, allow_pickle=False) as archive:
                 metadata = json.loads(str(archive["metadata"].item()))
-                if metadata.get("schema") != GLOBAL_PATCH_ORDERED_MEMORY_SCHEMA:
-                    raise MemoryBankError("unsupported ordered Global Patch schema")
+                if metadata.get("schema") != CASTJM_MEMORY_SCHEMA:
+                    raise MemoryBankError("unsupported CASTJM schema")
                 bank = cls(
                     class_name=metadata["class_name"],
                     categories=metadata["categories"],
@@ -527,14 +527,14 @@ class GlobalPatchOrderedMemoryBank:
             raise
         except Exception as exc:
             raise MemoryBankError(
-                f"cannot load ordered Global Patch memory {source}: {exc}"
+                f"cannot load CASTJM memory {source}: {exc}"
             ) from exc
         if expected_class_name is not None and bank.class_name != expected_class_name:
-            raise MemoryBankError("ordered Global Patch class does not match")
+            raise MemoryBankError("CASTJM class does not match")
         if expected_categories is not None and bank.categories != tuple(
             expected_categories
         ):
-            raise MemoryBankError("ordered Global Patch categories do not match")
+            raise MemoryBankError("CASTJM categories do not match")
         for actual, expected, label in (
             (bank.checkpoint_path, expected_checkpoint_path, "checkpoint"),
             (
@@ -546,17 +546,17 @@ class GlobalPatchOrderedMemoryBank:
             if expected is not None and actual != str(
                 Path(expected).expanduser().resolve()
             ):
-                raise MemoryBankError(f"ordered Global Patch {label} does not match")
+                raise MemoryBankError(f"CASTJM {label} does not match")
         return bank
 
 
-class GlobalPatchOrderedScorer:
+class CASTJMScorer:
     """Share one DINO pass and consume only the Global Patch anomaly map."""
 
     def __init__(
         self,
         *,
-        bank: GlobalPatchOrderedMemoryBank,
+        bank: CASTJMMemoryBank,
         global_patch_scorer,
         pixel_localizer: GlobalPatchPixelLocalizer | None = None,
     ) -> None:
@@ -573,7 +573,7 @@ class GlobalPatchOrderedScorer:
         self,
         features: PatchFeatureBundle,
         mask_pool: Mapping[str, Sequence[MaskInstance]],
-    ) -> GlobalPatchOrderedEvidence:
+    ) -> CASTJMEvidence:
         _, anomaly_map = self.global_patch_scorer.score_features_with_map(features)
         return self.bank.score_features(features, mask_pool, anomaly_map)
 
@@ -601,8 +601,8 @@ class GlobalPatchOrderedScorer:
         mask_pool: Mapping[str, Sequence[MaskInstance]],
         *,
         output_size: tuple[int, int],
-    ) -> tuple[GlobalPatchOrderedEvidence, GlobalPatchPixelLocalization]:
-        """Emit image-level GPO-JM evidence and Pixel localization from one map."""
+    ) -> tuple[CASTJMEvidence, GlobalPatchPixelLocalization]:
+        """Emit image-level CASTJM evidence and Pixel localization from one map."""
 
         _, anomaly_map = self.global_patch_scorer.score_features_with_map(features)
         evidence = self.bank.score_features(features, mask_pool, anomaly_map)
@@ -620,7 +620,7 @@ class GlobalPatchOrderedScorer:
         self,
         image,
         mask_pool: Mapping[str, Sequence[MaskInstance]],
-    ) -> GlobalPatchOrderedEvidence:
+    ) -> CASTJMEvidence:
         return self.score_features(self.extract_features(image), mask_pool)
 
     def localize(
@@ -642,7 +642,7 @@ class GlobalPatchOrderedScorer:
         mask_pool: Mapping[str, Sequence[MaskInstance]],
         *,
         output_size: tuple[int, int],
-    ) -> tuple[GlobalPatchOrderedEvidence, GlobalPatchPixelLocalization]:
+    ) -> tuple[CASTJMEvidence, GlobalPatchPixelLocalization]:
         """Extract features once for joint image scoring and Pixel localization."""
 
         return self.score_features_with_pixel_map(

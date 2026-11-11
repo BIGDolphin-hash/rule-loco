@@ -329,3 +329,5 @@ def evaluate_spatial_relation_by_subject(
         )
         for subject in subjects
     )
+
+

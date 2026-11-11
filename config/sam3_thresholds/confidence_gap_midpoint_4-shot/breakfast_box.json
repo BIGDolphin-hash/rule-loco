@@ -6,10 +6,10 @@
     "banana chips and almonds": 0.60
   },
   "calibration_images": [
-    "datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/004.png",
-    "datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/005.png",
-    "datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/007.png",
-    "datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/008.png"
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/004.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/005.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/007.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/breakfast_box/train/good/008.png"
   ],
   "initial_threshold": 0.40
 }

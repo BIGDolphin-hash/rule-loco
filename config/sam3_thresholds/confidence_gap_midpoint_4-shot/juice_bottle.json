@@ -7,10 +7,10 @@
     "fruit_icon": 0.60
   },
   "calibration_images": [
-    "datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/003.png",
-    "datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/004.png",
-    "datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/005.png",
-    "datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/006.png"
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/003.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/004.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/005.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/juice_bottle/train/good/006.png"
   ],
   "initial_threshold": 0.60
 }

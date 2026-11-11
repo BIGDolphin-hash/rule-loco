@@ -1,0 +1,20 @@
+# Direct dependencies from the local Python 3.12 inference environment.
+# Install matching torch/torchvision wheels for your driver before this file.
+# SAM3, CLIP and DINOv2 source checkouts are prepared separately (see README).
+torch==2.10.0
+torchvision==0.25.0
+numpy==1.26.4
+Pillow==11.3.0
+setuptools==80.9.0
+wheel
+timm==1.0.17
+ftfy==6.1.1
+regex
+tqdm
+iopath==0.1.10
+typing_extensions
+huggingface_hub
+packaging
+einops
+psutil
+pycocotools

@@ -193,7 +193,7 @@ def main() -> int:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=Path("datasets/mvtec_loco_anomaly_detection"),
+        default=Path("/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection"),
     )
     parser.add_argument("--template-root", type=Path, default=Path("templates/store"))
     parser.add_argument(
@@ -206,8 +206,8 @@ def main() -> int:
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--sam3-threshold", type=float, default=0.40)
-    parser.add_argument("--sam3-repo", default="models/SAM3")
-    parser.add_argument("--sam3-checkpoint", default="weights/sam3/sam3.pt")
+    parser.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
+    parser.add_argument("--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt")
     parser.add_argument("--mask-dedup-iou", type=float, default=0.80)
     parser.add_argument("--mask-dedup-containment", type=float, default=0.85)
     parser.add_argument("--grouping-tolerance", type=float, default=0.10)

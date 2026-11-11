@@ -5,10 +5,10 @@
     "connector_body": 0.70
   },
   "calibration_images": [
-    "datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/006.png",
-    "datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/007.png",
-    "datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/009.png",
-    "datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/010.png"
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/006.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/007.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/009.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/splicing_connectors/train/good/010.png"
   ],
   "initial_threshold": 0.60
 }

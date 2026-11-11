@@ -1,0 +1,5 @@
+[C001] TASK=COUNT | SUBJECT=small orange plastic locking tab | PROPERTY=count | OP=EQ
+[C002] TASK=COUNT | SUBJECT=wire | PROPERTY=count | OP=EQ
+[C003] TASK=COUNT | SUBJECT=connector_body | PROPERTY=count | OP=EQ
+[C004] TASK=LENGTH | SUBJECT=wire | PROPERTY=length | OP=RANGE
+[C005] TASK=ATTRIBUTE_COMBINATION | SUBJECT_1=small orange plastic locking tab | PROPERTY_1=attribute.count | SUBJECT_2=wire | PROPERTY_2=attribute.color | OP=EQ

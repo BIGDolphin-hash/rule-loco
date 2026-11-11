@@ -1,0 +1,5 @@
+[C001] TASK=COUNT | SUBJECT=screw | PROPERTY=count | OP=EQ
+[C002] TASK=COUNT | SUBJECT=hexagonal_nut | PROPERTY=count | OP=EQ
+[C003] TASK=COUNT | SUBJECT=thin flat washer with smooth round outer edge | PROPERTY=count | OP=EQ
+[C004] TASK=LENGTH | SUBJECT=screw | PROPERTY=length | OP=RANGE
+[C005] TASK=LENGTH | SUBJECT=screw | PROPERTY=length | OP=RANGE

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate GPO-JM, optionally preceded by the five binary rules."""
+"""Evaluate CASTJM, optionally preceded by the five binary rules."""
 
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ from pro_innovation.evaluation import (
     binary_auroc,
 )
 from pro_innovation.gpu_power import NvidiaGpuPowerMonitor
-from pro_innovation.memory_modules.gpojm import (
-    GPOJMGlobalPatchBank,
-    GPOJMGlobalPatchScorer,
-    GlobalPatchOrderedMemoryBank,
-    GlobalPatchOrderedScorer,
+from pro_innovation.memory_modules.castjm import (
+    CASTJMGlobalPatchBank,
+    CASTJMGlobalPatchScorer,
+    CASTJMMemoryBank,
+    CASTJMScorer,
 )
 from pro_innovation.mask_processing import MaskPostprocessor
 from pro_innovation.pipeline import (
@@ -42,7 +42,7 @@ from pro_innovation.templates import collect_categories, parse_template
 
 
 def _arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run GPO-JM/FiveRules evaluation")
+    parser = argparse.ArgumentParser(description="Run CASTJM/FiveRules evaluation")
     parser.add_argument("--class-name", required=True)
     parser.add_argument(
         "--dataset-root",
@@ -61,27 +61,27 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--joint-bank",
         help=(
-            "required for threshold-backed GPO-JM; ignored by no-threshold "
-            "GPO-JM, which returns the Global Patch score directly"
+            "required for threshold-backed CASTJM; ignored by no-threshold "
+            "CASTJM, which returns the Global Patch score directly"
         ),
     )
     parser.add_argument(
         "--memory-module",
-        choices=("gpojm",),
-        default="gpojm",
-        help="compatibility option; GPO-JM is the only supported memory module",
+        choices=("castjm",),
+        default="castjm",
+        help="compatibility option; CASTJM is the only supported memory module",
     )
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--sam3-repo", default="models/SAM3")
-    parser.add_argument("--sam3-checkpoint", default="weights/sam3/sam3.pt")
+    parser.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
+    parser.add_argument("--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt")
     parser.add_argument(
         "--dino-checkpoint",
-        default="weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth",
+        default="/home/lxq/weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth",
     )
-    parser.add_argument("--clip-repo", default="models/CLIP")
+    parser.add_argument("--clip-repo", default="/home/lxq/models/CLIP")
     parser.add_argument(
-        "--clip-checkpoint", default="weights/CLIP/ViT-L-14.pt"
+        "--clip-checkpoint", default="/home/lxq/weights/CLIP/ViT-L-14.pt"
     )
     parser.add_argument("--clip-threshold", type=float, default=0.35)
     parser.add_argument("--sam3-threshold", type=float, default=0.40)
@@ -113,7 +113,7 @@ def _arguments() -> argparse.Namespace:
         default=RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
         help=(
             "binary-selective returns 1 on the first failed rule and runs "
-            "GPO-JM only when all rules pass; binary-parallel runs both "
+            "CASTJM only when all rules pass; binary-parallel runs both "
             "branches and takes the maximum of their scores"
         ),
     )
@@ -156,7 +156,7 @@ def _memory_executed(record: dict) -> bool:
     timings = record.get("timings_seconds", {})
     return bool(
         float(timings.get("memory_total", 0.0) or 0.0) > 0.0
-        or record.get("gpojm_evidence") is not None
+        or record.get("castjm_evidence") is not None
         or record.get("global_patch_evidence") is not None
     )
 
@@ -184,12 +184,12 @@ def _memory_execution_summary(records: list[dict]) -> dict[str, float | int]:
         "executed_after_rule_failure": len(executed_after_failure),
         "skipped_after_rule_failure": len(failed) - len(executed_after_failure),
         "dinov2_seconds": timing_total(valid, "memory_feature_extraction"),
-        "gpojm_matching_seconds": timing_total(valid, "memory_composition"),
+        "castjm_matching_seconds": timing_total(valid, "memory_composition"),
         "total_branch_seconds": timing_total(valid, "memory_total"),
         "dinov2_seconds_after_rule_failure": timing_total(
             executed_after_failure, "memory_feature_extraction"
         ),
-        "gpojm_matching_seconds_after_rule_failure": timing_total(
+        "castjm_matching_seconds_after_rule_failure": timing_total(
             executed_after_failure, "memory_composition"
         ),
         "total_branch_seconds_after_rule_failure": timing_total(
@@ -236,7 +236,7 @@ def _initialize_models(
 
 def main() -> int:
     args = _arguments()
-    module_label = "GPO-JM"
+    module_label = "CASTJM"
     dataset = Path(args.dataset_root).expanduser().resolve()
     generic_path = Path(args.generic).expanduser().resolve() if args.generic else None
     standard_path = (
@@ -291,7 +291,7 @@ def main() -> int:
         categories: tuple[str, ...] = ()
         missing: tuple[str, ...] = ()
         print(
-            "[GPO-JM] no threshold policy; returning the Global Patch anomaly "
+            "[CASTJM] no threshold policy; returning the Global Patch anomaly "
             "score directly without segmentation or joint-memory processing",
             flush=True,
         )
@@ -300,7 +300,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed GPO-JM requires template or threshold-policy categories"
+                "SAM3-backed CASTJM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -309,7 +309,7 @@ def main() -> int:
         )
         if missing:
             print(
-                "[Rule+GPO-JM] warning: threshold policy is missing "
+                "[Rule+CASTJM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
@@ -321,7 +321,7 @@ def main() -> int:
             flush=True,
         )
 
-    global_bank = GPOJMGlobalPatchBank.load(
+    global_bank = CASTJMGlobalPatchBank.load(
         args.global_bank,
         expected_class_name=args.class_name,
         expected_checkpoint_path=args.dino_checkpoint,
@@ -329,7 +329,7 @@ def main() -> int:
     extractor = DinoV2PatchFeatureExtractor(
         checkpoint_path=args.dino_checkpoint, device=args.device
     )
-    global_patch_scorer = GPOJMGlobalPatchScorer(
+    global_patch_scorer = CASTJMGlobalPatchScorer(
         bank=global_bank,
         extractor=extractor,
         query_batch_size=args.query_batch_size,
@@ -340,17 +340,17 @@ def main() -> int:
         memory_scorer: Any = global_patch_scorer
     elif not args.joint_bank:
         raise ValueError(
-            "--joint-bank is required unless GPO-JM runs without a threshold policy"
+            "--joint-bank is required unless CASTJM runs without a threshold policy"
         )
     else:
-        memory_bank = GlobalPatchOrderedMemoryBank.load(
+        memory_bank = CASTJMMemoryBank.load(
             args.joint_bank,
             expected_class_name=args.class_name,
             expected_categories=categories,
             expected_checkpoint_path=args.dino_checkpoint,
             expected_global_patch_bank_path=args.global_bank,
         )
-        memory_scorer = GlobalPatchOrderedScorer(
+        memory_scorer = CASTJMScorer(
             bank=memory_bank,
             global_patch_scorer=global_patch_scorer,
         )
@@ -488,7 +488,7 @@ def main() -> int:
                     evidence_key = (
                         "global_patch_evidence"
                         if direct_global_patch_mode
-                        else "gpojm_evidence"
+                        else "castjm_evidence"
                     )
                     evidence_payload = (
                         payload["patch_evidence"]
@@ -602,9 +602,9 @@ def main() -> int:
             else module_label
             if not rules_enabled
             else (
-                "FiveRules-Binary+GPO-JM-Parallel"
+                "FiveRules-Binary+CASTJM-Parallel"
                 if binary_parallel
-                else "FiveRules-Binary+GPO-JM"
+                else "FiveRules-Binary+CASTJM"
             )
         ),
         "class_name": args.class_name,
@@ -616,32 +616,32 @@ def main() -> int:
             (
                 "global_patch_only"
                 if direct_global_patch_mode
-                else "gpojm_only"
+                else "castjm_only"
             )
             if not rules_enabled
             else (
-                "binary_parallel_five_rules_and_gpojm"
+                "binary_parallel_five_rules_and_castjm"
                 if binary_parallel
-                else "binary_selective_five_rules_then_gpojm"
+                else "binary_selective_five_rules_then_castjm"
             )
         ),
         "fusion": (
             (
                 "direct_global_patch_score"
                 if direct_global_patch_mode
-                else "one_gpojm_score"
+                else "one_castjm_score"
             )
             if not rules_enabled
             else (
-                "max_binary_rule_and_gpojm_scores"
+                "max_binary_rule_and_castjm_scores"
                 if binary_parallel
-                else "binary_rule_fail_early_exit_else_one_gpojm_score"
+                else "binary_rule_fail_early_exit_else_one_castjm_score"
             )
         ),
         "model_startup_seconds": model_startup_seconds,
         "model_startup_components_seconds": model_startup_components,
         "gpu_energy": gpu_energy,
-        "gpojm_execution": (
+        "castjm_execution": (
             None if direct_global_patch_mode else memory_execution
         ),
         "global_patch_execution": (
@@ -691,7 +691,7 @@ def main() -> int:
         "seconds_per_image": elapsed / len(records) if records else None,
         "rule_seconds": timing_totals["rule_total"] if rules_enabled else 0.0,
         "memory_seconds": timing_totals["memory_total"],
-        "gpojm_seconds": (
+        "castjm_seconds": (
             timing_totals["memory_total"]
             if not direct_global_patch_mode
             else None

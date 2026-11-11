@@ -14,7 +14,7 @@ from ..errors import ModelAdapterError
 
 
 DEFAULT_PATCH_DINOV2_CHECKPOINT = (
-    "weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth"
+    "/home/lxq/weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth"
 )
 PATCH_MATCHING_LAYERS = (6, 12, 18, 24)
 PATCH_MATCHING_INPUT_SIZE = 448

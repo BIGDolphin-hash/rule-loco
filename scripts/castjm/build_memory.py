@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one isolated Global Patch Ordered Joint Memory bank."""
+"""Build one isolated Category-Aligned Semantic–Texture Joint Memory bank."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from pro_innovation.adapters import (
     Sam3Segmenter,
     WholeImageSegmenter,
 )
-from pro_innovation.memory_modules.gpojm import (
+from pro_innovation.memory_modules.castjm import (
     DEFAULT_TEXTURE_WEIGHT,
     DEFAULT_TOP_FRACTION,
-    GPOJMGlobalPatchBank,
-    GlobalPatchOrderedMemoryBank,
+    CASTJMGlobalPatchBank,
+    CASTJMMemoryBank,
     category_only_embedding,
     global_patch_texture_signature,
 )
@@ -29,7 +29,7 @@ from pro_innovation.templates import collect_categories, parse_template
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build isolated Global Patch Ordered Joint Memory"
+        description="Build isolated Category-Aligned Semantic–Texture Joint Memory"
     )
     parser.add_argument("--class-name", required=True)
     parser.add_argument("--normal-dir", required=True)
@@ -38,11 +38,11 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--global-bank", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--sam3-repo", default="models/SAM3")
-    parser.add_argument("--sam3-checkpoint", default="weights/sam3/sam3.pt")
+    parser.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
+    parser.add_argument("--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt")
     parser.add_argument(
         "--dino-checkpoint",
-        default="weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth",
+        default="/home/lxq/weights/DINOV2/dinov2_vitl14_reg4_pretrain.pth",
     )
     parser.add_argument("--sam3-threshold", type=float, default=0.40)
     parser.add_argument("--sam3-prompt", default="{category}")
@@ -90,7 +90,7 @@ def main() -> int:
         categories = (args.class_name,)
         missing: tuple[str, ...] = ()
         print(
-            "[GPO-JM] no threshold policy; treating the complete image as "
+            "[CASTJM] no threshold policy; treating the complete image as "
             f"one {args.class_name!r} object without SAM3",
             flush=True,
         )
@@ -99,7 +99,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed GPO-JM requires template or threshold-policy categories"
+                "SAM3-backed CASTJM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -108,13 +108,13 @@ def main() -> int:
         )
         if missing:
             print(
-                "[GPO-JM] warning: threshold policy is missing "
+                "[CASTJM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
             )
 
-    global_bank = GPOJMGlobalPatchBank.load(
+    global_bank = CASTJMGlobalPatchBank.load(
         args.global_bank,
         expected_class_name=args.class_name,
         expected_checkpoint_path=args.dino_checkpoint,
@@ -206,14 +206,14 @@ def main() -> int:
             )
         completed = min(start + len(batch), total)
         print(
-            f"[GPO-JM] {args.class_name}: {completed}/{total} "
+            f"[CASTJM] {args.class_name}: {completed}/{total} "
             f"({completed / total * 100:.1f}%)",
             flush=True,
         )
 
     if feature_grid is None:
         raise RuntimeError("no joint-memory features were produced")
-    bank = GlobalPatchOrderedMemoryBank.build_from_components(
+    bank = CASTJMMemoryBank.build_from_components(
         class_name=args.class_name,
         categories=categories,
         category_features=torch.stack(category_rows, dim=0),
@@ -229,7 +229,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "module": "GPO-JM",
+                "module": "CASTJM",
                 "bank": str(output),
                 "class_name": bank.class_name,
                 "categories": list(bank.categories),

@@ -1,4 +1,7 @@
-"""Template-driven rules and GPO-JM anomaly detection."""
+"""Template-driven rule and patch anomaly detection.
+
+Global Patch and CASTJM provide post-rule memory detection.
+"""
 
 from .models import (
     CompositionEvidence,
@@ -9,6 +12,7 @@ from .models import (
     TaskType,
 )
 from .mask_processing import MaskPostprocessor
+from .memory_modules.global_patch import DinoV2PatchImageScorer, PatchMemoryBank
 from .pipeline import LogicAnomalyPipeline
 from .templates import parse_template, serialize_template, to_generic_template
 
@@ -17,7 +21,9 @@ __all__ = [
     "CompositionEvidence",
     "LogicAnomalyPipeline",
     "MaskPostprocessor",
+    "PatchMemoryBank",
     "PatchEvidence",
+    "DinoV2PatchImageScorer",
     "Rule",
     "RuleResult",
     "TaskType",

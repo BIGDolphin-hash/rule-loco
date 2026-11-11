@@ -1,0 +1,3 @@
+[C001] TASK=COUNT | SUBJECT=pushpin | PROPERTY=count | OP=EQ
+[C002] TASK=COUNT | SUBJECT=square_compartment | PROPERTY=count | OP=EQ
+[C003] TASK=SPATIAL_COMBINATION | SUBJECT=square_compartment | PROPERTY=spatial.position | OBJECT=pushpin | OP=EQ

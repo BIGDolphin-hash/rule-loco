@@ -1,18 +1,21 @@
-"""Public API for the independent GPO-JM module."""
+"""CASTJM: Category-Aligned Semantic–Texture Joint Memory.
+
+Public API for the independent semantic and texture joint-memory module.
+"""
 
 from .core import (
     BACKGROUND_BLOCK,
     DEFAULT_TEXTURE_WEIGHT,
     DEFAULT_TOP_FRACTION,
-    GLOBAL_PATCH_ORDERED_MEMORY_SCHEMA,
-    GLOBAL_PATCH_ORDERED_MODE,
+    CASTJM_MEMORY_SCHEMA,
+    CASTJM_MODE,
     STANDARDIZATION_EPSILON,
-    GlobalPatchOrderedEvidence,
-    GlobalPatchOrderedMemoryBank,
-    GlobalPatchOrderedScorer,
+    CASTJMEvidence,
+    CASTJMMemoryBank,
+    CASTJMScorer,
     global_patch_texture_signature,
 )
-from .global_patch import GPOJMGlobalPatchBank, GPOJMGlobalPatchScorer
+from .global_patch import CASTJMGlobalPatchBank, CASTJMGlobalPatchScorer
 from .pixel_texture import (
     GlobalPatchPixelLocalization,
     GlobalPatchPixelLocalizer,
@@ -24,14 +27,14 @@ __all__ = (
     "BACKGROUND_BLOCK",
     "DEFAULT_TEXTURE_WEIGHT",
     "DEFAULT_TOP_FRACTION",
-    "GLOBAL_PATCH_ORDERED_MEMORY_SCHEMA",
-    "GLOBAL_PATCH_ORDERED_MODE",
-    "GPOJMGlobalPatchBank",
-    "GPOJMGlobalPatchScorer",
+    "CASTJM_MEMORY_SCHEMA",
+    "CASTJM_MODE",
+    "CASTJMGlobalPatchBank",
+    "CASTJMGlobalPatchScorer",
     "STANDARDIZATION_EPSILON",
-    "GlobalPatchOrderedEvidence",
-    "GlobalPatchOrderedMemoryBank",
-    "GlobalPatchOrderedScorer",
+    "CASTJMEvidence",
+    "CASTJMMemoryBank",
+    "CASTJMScorer",
     "GlobalPatchPixelLocalization",
     "GlobalPatchPixelLocalizer",
     "GlobalPatchPixelScorer",

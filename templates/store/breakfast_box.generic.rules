@@ -1,0 +1,8 @@
+[C001] TASK=COUNT | SUBJECT=smooth taut-skinned nectarine | PROPERTY=count | OP=EQ
+[C002] TASK=COUNT | SUBJECT=tangerine | PROPERTY=count | OP=EQ
+[C003] TASK=AREA | SUBJECT=cereals | PROPERTY=area | OP=RANGE
+[C004] TASK=AREA | SUBJECT=banana chips and almonds | PROPERTY=area | OP=RANGE
+[C005] TASK=SPATIAL_COMBINATION | SUBJECT=smooth taut-skinned nectarine | PROPERTY=spatial.position | OBJECT=cereals | OP=EQ
+[C006] TASK=SPATIAL_COMBINATION | SUBJECT=tangerine | PROPERTY=spatial.position | OBJECT=cereals | OP=EQ
+[C007] TASK=SPATIAL_COMBINATION | SUBJECT=banana slices | PROPERTY=spatial.position | OBJECT=box | OP=GE
+[C008] TASK=SPATIAL_COMBINATION | SUBJECT=almonds | PROPERTY=spatial.position | OBJECT=box | OP=GE

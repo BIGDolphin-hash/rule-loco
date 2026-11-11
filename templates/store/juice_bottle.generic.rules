@@ -1,0 +1,10 @@
+[C001] TASK=COUNT | SUBJECT=bottle | PROPERTY=count | OP=EQ
+[C002] TASK=COUNT | SUBJECT=square_label | PROPERTY=count | OP=EQ
+[C003] TASK=COUNT | SUBJECT=bottom_rectangle_label | PROPERTY=count | OP=EQ
+[C004] TASK=COUNT | SUBJECT=liquid | PROPERTY=count | OP=EQ
+[C005] TASK=COUNT | SUBJECT=fruit_icon | PROPERTY=count | OP=EQ
+[C006] TASK=AREA | SUBJECT=liquid | PROPERTY=area | OP=RANGE
+[C007] TASK=SPATIAL_COMBINATION | SUBJECT=square_label | PROPERTY=spatial.position | OBJECT=bottle | OP=EQ
+[C008] TASK=SPATIAL_COMBINATION | SUBJECT=bottom_rectangle_label | PROPERTY=spatial.position | OBJECT=bottle | OP=EQ
+[C009] TASK=SPATIAL_COMBINATION | SUBJECT=fruit_icon | PROPERTY=spatial.position | OBJECT=square_label | OP=EQ
+[C010] TASK=ATTRIBUTE_COMBINATION | SUBJECT_1=fruit_icon | PROPERTY_1=attribute.type | SUBJECT_2=liquid | PROPERTY_2=attribute.color | OP=EQ

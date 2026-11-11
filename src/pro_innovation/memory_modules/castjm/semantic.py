@@ -1,4 +1,8 @@
-"""Category-ordered semantic descriptors owned by GPO-JM."""
+"""CASTJM-owned ordered semantic descriptor construction.
+
+CASTJM owns this implementation so its semantic descriptor remains independent
+of other memory modules.
+"""
 
 from __future__ import annotations
 
@@ -32,22 +36,22 @@ def category_only_embedding(
     mask_pool: Mapping[str, Sequence[MaskInstance]],
     categories: Sequence[str],
 ) -> tuple[torch.Tensor, dict[str, slice]]:
-    """Build GPO-JM's fixed-order semantic vector ``[f1; ...; fC]``."""
+    """Build CASTJM's fixed-order semantic vector ``[f1; ...; fC]``."""
 
     ordered = tuple(str(category) for category in categories)
     if not ordered or len(set(ordered)) != len(ordered):
-        raise MemoryBankError("GPO-JM categories must be unique and non-empty")
+        raise MemoryBankError("CASTJM categories must be unique and non-empty")
     if tuple(sorted(features.layer_features)) != PATCH_MATCHING_LAYERS:
-        raise MemoryBankError("GPO-JM features are missing required DINO layers")
+        raise MemoryBankError("CASTJM features are missing required DINO layers")
     positions = features.feature_grid[0] * features.feature_grid[1]
     dimensions = {int(value.shape[-1]) for value in features.layer_features.values()}
     if len(dimensions) != 1:
-        raise MemoryBankError("GPO-JM DINO layers use different dimensions")
+        raise MemoryBankError("CASTJM DINO layers use different dimensions")
     dimension = next(iter(dimensions))
     for layer in PATCH_MATCHING_LAYERS:
         values = features.layer_features[layer]
         if values.ndim != 2 or tuple(values.shape) != (positions, dimension):
-            raise MemoryBankError(f"invalid GPO-JM Block {layer} feature shape")
+            raise MemoryBankError(f"invalid CASTJM Block {layer} feature shape")
 
     chunks: list[torch.Tensor] = []
     slices: dict[str, slice] = {}
@@ -59,7 +63,7 @@ def category_only_embedding(
             selected = _resize_category_mask(instance, features.feature_grid)
             if not selected.any():
                 raise MemoryBankError(
-                    f"GPO-JM instance for {category!r} disappears on the DINO grid"
+                    f"CASTJM instance for {category!r} disappears on the DINO grid"
                 )
             layer_vectors = []
             for layer in PATCH_MATCHING_LAYERS:

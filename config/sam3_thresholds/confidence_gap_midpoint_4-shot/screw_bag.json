@@ -5,10 +5,10 @@
     "thin flat washer with smooth round outer edge": 0.70
   },
   "calibration_images": [
-    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/010.png",
-    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/015.png",
-    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/018.png",
-    "datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/025.png"
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/010.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/015.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/018.png",
+    "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection/screw_bag/train/good/025.png"
   ],
   "initial_threshold": 0.60
 }

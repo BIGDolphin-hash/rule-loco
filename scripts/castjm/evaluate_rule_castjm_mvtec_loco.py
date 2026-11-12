@@ -37,7 +37,7 @@ from pro_innovation.pipeline import (
     RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
     RULE_MEMORY_SCHEDULES,
 )
-from pro_innovation.sam3_calibration import load_sam3_threshold_policy
+from pro_innovation.sam3_thresholds import load_sam3_threshold_policy
 from pro_innovation.templates import collect_categories, parse_template
 
 

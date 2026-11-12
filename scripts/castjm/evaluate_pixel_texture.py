@@ -41,7 +41,7 @@ DEFAULT_DATASET_ROOTS = {
     VISA: PROJECT_ROOT / "datasets" / "visa",
 }
 DEFAULT_GLOBAL_ROOT = PROJECT_ROOT / "memory_banks" / "Global patch"
-DEFAULT_RESULT_ROOT = PROJECT_ROOT / "results" / "gppl_pixel"
+DEFAULT_RESULT_ROOT = PROJECT_ROOT / "results" / "pixel_level" / "gppl_pixel"
 RUN_SCHEMA = "pro-innovation.gppl-pixel-evaluation.v1"
 
 

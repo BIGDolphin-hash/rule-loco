@@ -10,6 +10,10 @@
 !/src/**/
 !/src/**/*.py
 
+!/tests/
+!/tests/test_template_generation.py
+!/tests/test_vlm.py
+
 !/scripts/
 !/scripts/fill_measurement_templates.py
 !/scripts/castjm/
@@ -25,9 +29,15 @@
 !/examples/*.rules
 
 !/config/
-!/config/attribute_vocabulary.example.json
-!/config/juice_bottle.attribute_vocabulary.json
-!/config/splicing_connectors.attribute_vocabulary.json
+!/config/README.md
+# Local model credentials are never part of the source release.
+/config/vlm/
+!/config/attributes/
+!/config/attributes/example.json
+!/config/attributes/juice_bottle.json
+!/config/attributes/splicing_connectors.json
+!/config/template_generation/
+!/config/template_generation/uts.v1.json
 !/config/sam3_thresholds/
 !/config/sam3_thresholds/confidence_gap_midpoint_4-shot/
 !/config/sam3_thresholds/confidence_gap_midpoint_4-shot/*.json

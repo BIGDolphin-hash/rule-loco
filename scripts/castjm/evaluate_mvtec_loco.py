@@ -25,7 +25,7 @@ from pro_innovation.memory_modules.castjm import (
     CASTJMMemoryBank,
 )
 from pro_innovation.mask_processing import MaskPostprocessor
-from pro_innovation.sam3_calibration import load_sam3_threshold_policy
+from pro_innovation.sam3_thresholds import load_sam3_threshold_policy
 from pro_innovation.templates import collect_categories, parse_template
 
 

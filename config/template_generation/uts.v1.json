@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "tasks": [
+    {"task": "COUNT", "properties": ["count"], "operators": ["EQ"]},
+    {"task": "LENGTH", "properties": ["length"], "operators": ["RANGE"], "unit": "pixel"},
+    {"task": "AREA", "properties": ["area"], "operators": ["RANGE"], "unit": "pixel_squared"},
+    {
+      "task": "SPATIAL_COMBINATION",
+      "properties": ["spatial.position", "spatial.self_symmetry"],
+      "operators": ["EQ", "GE"],
+      "relations": [
+        "left_of", "right_of", "above", "below",
+        "upper_left_of", "upper_right_of", "lower_left_of", "lower_right_of",
+        "inside", "contains", "at_left", "at_right", "at_top", "at_lower",
+        "at_center", "at_middle", "self_left_right_symmetric", "self_top_bottom_symmetric"
+      ]
+    },
+    {
+      "task": "ATTRIBUTE_COMBINATION",
+      "properties": ["attribute.count", "attribute.color", "attribute.shape", "attribute.type"],
+      "operators": ["EQ"]
+    }
+  ]
+}

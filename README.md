@@ -175,7 +175,8 @@ rule-loco/
 │   ├── geometry.py            # 长度、面积和等级分组
 │   ├── spatial.py             # 空间关系与对称性
 │   ├── attributes.py          # 颜色、形状和语义属性路由
-│   ├── sam3_calibration.py    # 类别级 SAM3 阈值标定
+│   ├── sam3_thresholds/       # SAM3 阈值输入、选择算法、生成与策略读写
+│   ├── sam3_calibration.py    # 旧阈值标定导入路径的兼容层
 │   └── evaluation.py          # 数据集评测、续跑和 AUROC
 ├── templates/store/           # 五个 MVTec LOCO 类别的模板对
 ├── scripts/
@@ -186,7 +187,10 @@ rule-loco/
 │       ├── evaluate_mvtec_loco.py     # 独立 CASTJM 评测
 │       └── evaluate_pixel_texture.py  # 纯纹理定位评测
 ├── config/
-│   ├── *.json                # 属性候选词表
+│   ├── attributes/           # 属性候选词表
+│   ├── template_generation/  # UTS 通用任务定义
+│   ├── vlm/                  # 本机 VLM 部署配置（不发布）
+│   ├── data_selection/       # Patch 与 few-shot 选样清单（不发布）
 │   ├── sam3_thresholds/      # 五个类别的分割阈值策略
 │   └── environment/requirements-inference.txt  # 推理依赖
 ├── examples/                 # 最小规则语法示例
@@ -264,6 +268,100 @@ PYTHONPATH=src python -m pro_innovation make-generic \
   --output /tmp/screw_bag.generic.rules
 ```
 
+#### 从图片和 UTS 自动生成 CQT / NRT
+
+独立模块 `pro_innovation.template_generation` 实现：**正常参考图片 + UTS → 配置的视觉语言模型 → CQT、NRT**。生成接口只有 `images`、`uts` 两个任务输入；返回对象只有 `cqt`、`nrt` 两个字段。CQT 使用现有 `generic.rules` 格式，NRT 使用 `standard.rules` 格式，可直接交给现有解析器和规则推理入口。
+
+`config/template_generation/uts.v1.json` 提供与当前执行器匹配的通用任务定义。UTS 是 JSON 对象，包含整数 `version: 1` 和非空 `tasks` 列表；每项定义 `task`、`properties`、`operators`，长度/面积任务另外定义 `unit`，空间任务另外定义 `relations`。可以删除不需要的任务或缩小允许的属性、关系和操作符集合；生成结果会检查这些限制。
+
+模型调用统一经过独立的 `pro_innovation.vlm.VisionLanguageClient` 接口。该层负责协议、认证、模型参数、图片限制及响应解析；模板生成层只负责固定提示词、图片与 UTS、CQT/NRT 校验和修正。模型选择属于部署配置，不增加生成接口的任务输入，也不会改变固定的生成提示词。
+
+默认仍使用千问 `qwen3.8-max`，原来的 `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL` 配置继续有效。通过以下环境变量切换模型，无需修改生成代码：
+
+| 环境变量 | 含义 |
+|---|---|
+| `VLM_PROVIDER` | `qwen`（默认）、`openai`、`openai-compatible`、`anthropic`、`gemini` |
+| `VLM_MODEL` | 模型 ID；千问默认 `qwen3.8-max`，其他服务必须显式指定 |
+| `VLM_API_KEY` | 当前服务的 API Key；优先于服务专用变量 |
+| `VLM_BASE_URL` | API Base URL；自定义兼容服务必须提供，其他服务提供默认地址 |
+| `VLM_STRUCTURED_OUTPUT` | `json_schema`（默认）、`json_object` 或 `prompt`；Anthropic 支持 `json_schema`、`prompt` |
+| `VLM_TIMEOUT_SECONDS` | 单次请求超时，默认 180 秒 |
+| `VLM_MAX_OUTPUT_TOKENS` | 可选输出 token 上限；Anthropic 未设置时使用 16384 |
+| `VLM_REQUEST_OPTIONS` | 可选 JSON 对象，指定所选模型支持的参数；Gemini 参数放入 `generationConfig` |
+| `VLM_MAX_REQUEST_BYTES` | 可选请求体预算；默认按所选服务设置 |
+| `VLM_CONFIG_FILE` | 可选本地 JSON 配置路径；空字符串禁用文件读取 |
+
+源码运行时会自动读取本机的 `config/vlm/vlm.local.json`（存在时）。文件字段与 `VLMConfig` 一致，例如 `provider`、`model`、`api_key`、`base_url`；此文件被版本控制忽略，包含 Key 时应保持权限 `0600`。环境变量优先于文件；显式切换到不同服务时，不沿用原服务文件中的 Key 或地址。文件内的部署配置不增加生成接口的任务输入。
+
+`VLM_API_KEY` 未配置时，分别读取 `DASHSCOPE_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`GEMINI_API_KEY`；自定义兼容服务使用 `VLM_API_KEY`。不同服务之间不会借用 API Key。`VLM_BASE_URL` 未配置且服务为千问时，继续读取 `DASHSCOPE_BASE_URL`。千问默认北京地域地址，其他地域或工作空间域名使用相应的 Base URL，Key 和地址应属于同一地域。
+
+目前提供三种协议适配器：`ChatCompletionsClient` 用于千问、OpenAI 及兼容服务，`AnthropicClient` 用于原生 Messages API，`GeminiClient` 用于原生 generateContent API。千问的高分辨率、思考模式和温度默认参数只在千问适配器内设置；其他服务不自动携带这些参数。`VLM_REQUEST_OPTIONS` 可以调整模型参数，但不能覆盖模型名、消息、输出结构或 token 预算。模型不支持 JSON Schema 时，可以显式选择 `json_object` 或 `prompt`，所有模式都保留本地严格校验，不会遇到错误后静默更换模型或输出协议。
+
+```bash
+# 在当前 shell 中交互输入 Key；不会把 Key 写入源码或 shell 历史。
+read -r -s -p 'DashScope API Key: ' DASHSCOPE_API_KEY
+export DASHSCOPE_API_KEY
+
+PYTHONPATH=src python -m pro_innovation.template_generation \
+  --images /path/to/normal_01.png /path/to/normal_02.png \
+  --uts config/template_generation/uts.v1.json > /tmp/cqt_nrt.json
+```
+
+例如，切换到其他 OpenAI 兼容视觉模型时，设置以下配置，并使用同一条生成命令：
+
+```bash
+export VLM_PROVIDER=openai-compatible
+export VLM_MODEL='your-vision-model-id'
+export VLM_BASE_URL='https://your-model-service.example/v1'
+read -r -s -p 'VLM API Key: ' VLM_API_KEY
+export VLM_API_KEY
+```
+
+切换原生服务时，将 `VLM_PROVIDER` 改为 `anthropic` 或 `gemini`，设置对应的 `VLM_MODEL` 和 Key，并移除前一个服务的 `VLM_BASE_URL`；服务将使用自己的默认地址。
+
+也可以使用主 CLI 的 `generate-templates` 子命令，参数相同。命令成功时 stdout 仅输出 `{"cqt": "...", "nrt": "..."}`；错误写入 stderr 并以状态码 `2` 退出。模块复用项目现有依赖，无需安装额外的 API SDK，也不加载 SAM3、CLIP 或 DINOv2 权重。
+
+Python 调用和分别保存两份模板：
+
+```python
+from pathlib import Path
+from pro_innovation.template_generation import generate_templates
+
+templates = generate_templates(
+    images=["/path/to/normal_01.png", "/path/to/normal_02.png"],
+    uts=Path("config/template_generation/uts.v1.json"),
+)
+Path("/tmp/product.generic.rules").write_text(templates.cqt + "\n", encoding="utf-8")
+Path("/tmp/product.standard.rules").write_text(templates.nrt + "\n", encoding="utf-8")
+```
+
+也可以通过构造函数注入统一客户端，适合在同一进程中对比多个模型：
+
+```python
+import os
+from pro_innovation.vlm import VLMConfig, create_vlm_client
+from pro_innovation.template_generation import TemplateGenerator
+
+client = create_vlm_client(VLMConfig(
+    provider="openai-compatible",
+    model="your-vision-model-id",
+    base_url="https://your-model-service.example/v1",
+    api_key=os.environ["VLM_API_KEY"],
+))
+generator = TemplateGenerator(client=client)
+templates = generator.generate(images=["/path/to/normal.png"], uts=Path("config/template_generation/uts.v1.json"))
+```
+
+接入新的原生协议时，实现 `complete(request: VisionRequest) -> str`，通过 `TemplateGenerator(client=...)` 注入即可；无需改动模板逻辑。`VisionRequest` 包含协议无关的系统提示、文本/图片消息和 JSON Schema，客户端只返回最终文本，截断、拒绝或请求失败时抛出 `VLMError`。同一个 `TemplateGenerator` 复用自己的客户端，每次生成重新开始对话；需要切换服务时创建新的客户端和生成器。旧的 `QwenClient` 构造入口保留，其 `complete` 方法也使用统一的 `VisionRequest`。
+
+`images` 支持单个本地路径、PIL 图片或它们的序列；`uts` 支持 JSON 字典、JSON 文本或 `Path` 文件。参考图片应属于同一产品类别，并覆盖希望纳入 NRT 的正常配置。图片按原始像素尺寸编码为 PNG，不自动缩图或应用 EXIF 旋转。图片限制属于具体适配器：千问检查图片数量、16M 像素和 20 MiB 编码限制；OpenAI Chat Completions 和 Anthropic 适配器分别使用 8 MiB、5 MiB 的单图预算。请求体默认预算为千问 DashScope 域名 16 MiB、千问工作空间域名 64 MiB、Gemini 内联请求 20 MiB、其他接口 32 MiB；可以通过 `VLM_MAX_REQUEST_BYTES` 调整本地预算，实际服务限制仍需满足。
+
+固定提示词位于 `src/pro_innovation/template_generation/prompts.py`，指导模型选择有视觉依据的任务、统一对象命名、保留实际观察到的属性配对，并区分对象总数与满足度量/空间条件的实例数。不根据未出现的配置扩展正常集合，不强制输出全部五类任务；无法可靠确定像素区间时省略对应度量规则。模型生成的长度/面积区间属于候选估计，不能视为已通过正常样本标定的测量结果。
+
+默认通过 JSON Schema 限制两个输出字段，再复用现有模板解析器检查完整性、CQT 空值、两份模板对齐，以及 UTS、空间关系、属性标签和明显的数量/尺寸矛盾。无效模板最多进行三轮生成/修正，仍不合法则报错，不返回部分模板。共享 HTTP 层在限流或部分暂时性服务端错误时最多尝试三次；认证错误和连接超时直接报错，拒绝或截断的响应不会当作完整模板返回。校验不代表视觉内容已被证实，生成的正常约束仍需要结合参考图片确认。
+
+官方接口依据：[千问图片输入](https://help.aliyun.com/zh/model-studio/vision)、[千问结构化输出](https://help.aliyun.com/zh/model-studio/qwen-structured-output)、[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[Claude 结构化输出](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)、[Gemini generateContent](https://aistudio.google.com/api-reference/generate-content/generate-content)。
+
 ### 4.2 规则推理
 
 下面的命令只展示必要结构；请替换本机模型路径：
@@ -285,7 +383,7 @@ PYTHONPATH=src python -m pro_innovation infer \
 含复杂语义属性的类别还需要属性词表和 CLIP 路径，例如：
 
 ```bash
---attribute-vocabulary config/juice_bottle.attribute_vocabulary.json \
+--attribute-vocabulary config/attributes/juice_bottle.json \
 --clip-repo /path/to/CLIP \
 --clip-checkpoint /path/to/ViT-L-14.pt
 ```
@@ -331,7 +429,53 @@ PYTHONPATH=src python -m pro_innovation calibrate-sam3-thresholds \
   --device cuda
 ```
 
-标定候选阈值默认从 `0.20` 生成候选；`confidence_gap_midpoint` 根据必须保留与多余实例的置信度间隔选择类别阈值。该过程不更新 SAM3 参数。
+同一套参数也可以通过独立模块运行：将上述命令的 `python -m pro_innovation calibrate-sam3-thresholds` 换成 `python -m pro_innovation.sam3_thresholds`。两个入口共用参数定义和生成流程。
+
+当前 `confidence_gap_midpoint` 的生成步骤如下，该过程不更新 SAM3 参数：
+
+1. 读取正常图像和数量真值。优先使用显式 `COUNT`，缺失时从 `LENGTH`/`AREA` 的 `COUNT` 取值；允许数量集合默认取最大值。至少需要两张可解码的正常图像。
+2. 每张图像按类别生成一次 SAM3 候选，候选阈值 `--sam3-threshold` 默认 `0.20`，随后进行同类别 Mask 去重。
+3. 对图像中数量真值为 `N` 的类别，将置信度降序排列：第 `N` 个为保留边界，第 `N+1` 个为多余实例边界；没有多余实例时用候选阈值作为其上界。
+4. 汇总得到 `L = Q95(多余实例边界)`、`U = Q05(保留边界)`。若 `L < U`，取 `(L + U) / 2`，再按 `0.10` 向下取整；数量为零、候选不足或边界重叠的类别记录标定失败。
+5. 保存精简运行策略和完整报告。策略只包含 `selected_thresholds`、`calibration_images` 和 `initial_threshold`；报告保留边界、候选分数、失败原因及最终阈值下的实例数量。失败类别不写入阈值映射，运行时继续使用全局阈值回退。向下取整沿用原算法，可能越过置信度边界，可通过报告中的 `count_at_selected_threshold` 复核。
+
+数量随图像变化时，可使用 `--truth-counts 2 3 2 --truth-subject screw`，或重复传入 `--truth-subject-counts screw 2 3 2` 为多个对象提供数量；也可以用 `--truth-templates` 提供逐图真值模板。这三种输入方式互斥，数量或模板顺序均与原始图像顺序一致，坏图跳过后仍保持对应关系。已有策略需显式传入 `--overwrite` 才会替换。完整报告默认保存在 `<calibration-result-root>/<策略父目录名>/<class-name>.json`，全部类别成功时退出码为 `0`，部分或全部失败时为 `2`。
+
+阈值模块的职责划分如下：
+
+| 文件 | 职责 |
+| --- | --- |
+| `config.py` | 统一默认值、`Sam3CalibrationConfig` 与配置来源记录 |
+| `inputs.py` / `truth.py` | 图像检查、逐图真值对齐与规则数量提取 |
+| `selection.py` | 纯置信度边界计算和阈值取整 |
+| `calibration.py` | 通过 `Segmenter` / `MaskProcessor` 接口执行标定，只累计分数 |
+| `generator.py` | 组织模型和后处理，保存策略及报告 |
+| `policy.py` | 精简策略和历史策略的加载、两类产物的保存 |
+| `cli.py` | 独立入口和项目子命令共用的参数与执行适配 |
+
+Python 调用无需依赖 CLI：
+
+```python
+from pro_innovation.sam3_thresholds import (
+    Sam3CalibrationConfig,
+    generate_sam3_thresholds,
+    prepare_calibration_inputs,
+)
+
+inputs = prepare_calibration_inputs(
+    standard_path="templates/store/screw_bag.standard.rules",
+    normal_dir="/path/to/screw_bag/train/good",
+)
+result = generate_sam3_thresholds(
+    class_name="screw_bag",
+    inputs=inputs,
+    config=Sam3CalibrationConfig(proposal_threshold=0.20),
+    output="/path/to/screw_bag.thresholds.json",
+    result_root="/path/to/calibration_reports",
+)
+```
+
+已有分割器或自定义后处理时，可以直接调用 `calibrate_sam3_thresholds(...)` 获取完整标定结果，也可以向 `generate_sam3_thresholds(...)` 注入 `segmenter` 和 `mask_processor`。旧的 `pro_innovation.sam3_calibration` 导入路径继续可用。
 
 `config/sam3_thresholds/confidence_gap_midpoint_4-shot/` 同时提供原实验五个类别的阈值策略。文件中的 `calibration_images` 仅记录原标定图像路径，不包含图像；切换数据集、权重或对象定义后应重新标定。以下建库和完整评测使用的阈值策略必须一致。
 
@@ -401,7 +545,7 @@ CASTJM 入口按已有 `all.jsonl` 中的图像路径续跑；配置或逻辑改
 
 ### 6.1 纯纹理 Pixel 评测
 
-GPPL 读取已有 Global Patch 库，在 `448 × 448` 上对预测热力图和真值掩码进行一致评测。MVTec AD 使用 `ground_truth/<defect>/*_mask.png`，VisA 使用官方 `split_csv/1cls.csv` 的 `mask` 列。入口逐图缓存 `64 × 64` Patch 异常图，可中断后直接重跑续算；输出逐类及宏平均 Image AUROC 和 Pixel AUROC。
+GPPL 读取已有 Global Patch 库，在 `448 × 448` 上对预测热力图和真值掩码进行一致评测。MVTec AD 使用 `ground_truth/<defect>/*_mask.png`，VisA 使用官方 `split_csv/1cls.csv` 的 `mask` 列。入口逐图缓存 `64 × 64` Patch 异常图，可中断后直接重跑续算；输出逐类及宏平均 Image AUROC 和 Pixel AUROC。默认结果根目录为 `results/pixel_level/gppl_pixel/`，其下按数据集、shot 和类别保存。
 
 ```bash
 PYTHONPATH=src python scripts/castjm/evaluate_pixel_texture.py \
@@ -409,7 +553,7 @@ PYTHONPATH=src python scripts/castjm/evaluate_pixel_texture.py \
   --dataset-root /path/to/mvtec_anomaly_detection \
   --bank-root /path/to/mvtec-ad-global-banks \
   --dino-checkpoint /path/to/dinov2_vitl14_reg4.pth \
-  --result-root /path/to/results/gppl_mvtec_ad \
+  --result-root /path/to/results/pixel_level/gppl_pixel \
   --shot full \
   --device cuda
 
@@ -418,7 +562,7 @@ PYTHONPATH=src python scripts/castjm/evaluate_pixel_texture.py \
   --dataset-root /path/to/visa \
   --bank-root /path/to/visa-global-banks \
   --dino-checkpoint /path/to/dinov2_vitl14_reg4.pth \
-  --result-root /path/to/results/gppl_visa \
+  --result-root /path/to/results/pixel_level/gppl_pixel \
   --shot full \
   --device cuda
 ```
@@ -481,7 +625,7 @@ Mask 路径支持四种缓存模式：
 ## 9. 当前边界
 
 - 本项目是研究代码，不是经过产品化验证的质量判定系统；
-- 模板需要人工确认，当前没有绑定在线多模态模型自动生成标准模板；
+- 可以通过统一的 `vlm` 接口接入视觉语言模型，由 `template_generation` 生成 CQT/NRT 候选模板；生成结果需要确认，JSON/语义格式校验不保证视觉判断正确；
 - 简单形状只区分 `square`、`round`、`elongated`；颜色为候选调色板中的平均 RGB 最近项；
 - 空间关系是可解释的几何启发式，并非学习得到的空间概率模型；
 - CLIP 只在用户提供的候选属性词表内分类，标准答案不会动态注入候选集；

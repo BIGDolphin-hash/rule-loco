@@ -15,6 +15,7 @@ from pro_innovation.adapters.sam3 import Sam3Segmenter
 from pro_innovation.geometry import ranked_measurements
 from pro_innovation.mask_processing import MaskPostprocessor
 from pro_innovation.models import Rule, TaskType
+from pro_innovation.sam3_thresholds import load_sam3_threshold_policy
 from pro_innovation.templates import parse_template, serialize_template
 
 
@@ -58,11 +59,10 @@ def fill_class(args: argparse.Namespace, class_name: str, run_dir: Path) -> dict
     if not targets:
         raise ValueError(f"{class_name} has no LENGTH/AREA rules")
 
-    policy = json.loads(threshold_path.read_text(encoding="utf-8"))
-    category_thresholds = {
-        str(key): float(value)
-        for key, value in policy["selected_thresholds"].items()
-    }
+    policy = load_sam3_threshold_policy(
+        threshold_path, expected_class_name=class_name
+    )
+    category_thresholds = policy.selected_thresholds
     subjects = tuple(dict.fromkeys(rule.subject or "" for rule in targets))
     missing_thresholds = [subject for subject in subjects if subject not in category_thresholds]
     if missing_thresholds:

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -31,7 +29,6 @@ from .evaluation import (
     validate_attribute_vocabulary,
 )
 from .mask_processing import MaskPostprocessor
-from .image_validation import filter_decodable_images
 from .memory_modules.global_patch import (
     PATCH_FEATURE_GLOBAL,
     PATCH_MEMORY_PER_IMAGE_STORAGE,
@@ -51,13 +48,19 @@ from .pipeline import (
     RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
     RULE_MEMORY_SCHEDULES,
 )
-from .sam3_calibration import (
-    CALIBRATION_SELECTION_METHODS,
+from .sam3_thresholds import (
     CALIBRATION_PROPOSAL_THRESHOLD,
-    calibrate_sam3_thresholds,
+    build_sam3_threshold_configuration,
     load_sam3_threshold_policy,
-    save_sam3_threshold_calibration_result,
-    save_sam3_threshold_policy,
+    resolve_normal_images,
+)
+from .sam3_thresholds.cli import (
+    probability_argument as _probability_argument,
+    add_arguments as add_sam3_calibration_arguments,
+    run as _command_calibrate_sam3,
+)
+from .sam3_thresholds.config import (
+    DEFAULT_SAM3_THRESHOLD_POLICY_ROOT,
 )
 from .template_store import TemplateRepository
 from .templates import (
@@ -70,15 +73,6 @@ from .templates import (
 
 DEFAULT_PATCH_BANK_ROOT = "/home/lxq/pro-innovation/memory_banks/Global patch/full"
 
-DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT = (
-    "/home/lxq/pro-innovation/config/sam3_thresholds"
-)
-DEFAULT_SAM3_THRESHOLD_POLICY_ROOT = (
-    f"{DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT}/" "confidence_gap_midpoint_4-shot"
-)
-DEFAULT_SAM3_THRESHOLD_RESULT_ROOT = (
-    "/home/lxq/pro-innovation/results/sam3_threshold_calibration"
-)
 DEFAULT_SAM3_CACHE_ROOT = "/home/lxq/pro-innovation/cache/sam3"
 DEFAULT_DATASET_BASES = {
     MVTEC_LOCO: "/home/lxq/pro-innovation/datasets/mvtec_loco_anomaly_detection",
@@ -92,26 +86,10 @@ def _read(path: str) -> str:
 
 
 def _resolve_normal_images(args: argparse.Namespace) -> tuple[Path, ...]:
-    explicit = getattr(args, "normal_images", None)
-    directory = getattr(args, "normal_dir", None)
-    if bool(explicit) == bool(directory):
-        raise ValueError("provide exactly one of --normal-images or --normal-dir")
-    if directory:
-        root = Path(directory).expanduser().resolve()
-        if not root.is_dir():
-            raise ValueError(f"normal image directory not found: {root}")
-        paths = tuple(
-            path.resolve()
-            for path in sorted(root.iterdir())
-            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
-        )
-    else:
-        paths = tuple(Path(path).expanduser().resolve() for path in explicit)
-    if len(paths) < 1:
-        raise ValueError("normal memory requires at least one image")
-    if len(set(paths)) != len(paths):
-        raise ValueError("normal memory images must be distinct")
-    return paths
+    return resolve_normal_images(
+        normal_images=getattr(args, "normal_images", None),
+        normal_dir=getattr(args, "normal_dir", None),
+    )
 
 
 def _write_or_print(text: str, output: str | None) -> None:
@@ -133,18 +111,6 @@ def _progress_reporter(module: str):
         )
 
     return report
-
-
-def _probability_argument(value: str) -> float:
-    """Parse a CLI probability/threshold in the closed interval [0, 1]."""
-
-    try:
-        parsed = float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("must be a number in [0, 1]") from exc
-    if not 0.0 <= parsed <= 1.0:
-        raise argparse.ArgumentTypeError("must be in [0, 1]")
-    return parsed
 
 
 def _command_validate(args: argparse.Namespace) -> int:
@@ -220,23 +186,17 @@ def _patch_bank_path(args: argparse.Namespace, class_name: str | None) -> Path:
     )
 
 
-def _file_sha256(path: str | Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _sam3_threshold_configuration(
     args: argparse.Namespace, *, standard_path: str
 ) -> dict[str, Any]:
-    standard = Path(standard_path).expanduser().resolve()
-    return {
-        "sam3_prompt": str(getattr(args, "sam3_prompt", "{category}")),
-        "sam3_checkpoint": str(Path(args.sam3_checkpoint).expanduser().resolve()),
-        "mask_dedup_iou_threshold": float(args.mask_dedup_iou),
-        "mask_dedup_containment_threshold": float(args.mask_dedup_containment),
-        "mask_dedup_enabled": bool(args.mask_dedup),
-        "standard_template": str(standard),
-        "standard_template_sha256": _file_sha256(standard),
-    }
+    return build_sam3_threshold_configuration(
+        standard_path=standard_path,
+        checkpoint_path=args.sam3_checkpoint,
+        prompt_template=str(getattr(args, "sam3_prompt", "{category}")),
+        mask_dedup_iou=args.mask_dedup_iou,
+        mask_dedup_containment=args.mask_dedup_containment,
+        mask_dedup=args.mask_dedup,
+    )
 
 
 def _resolve_sam3_threshold_runtime(
@@ -835,249 +795,6 @@ def _command_build_patch_memory(args: argparse.Namespace) -> int:
     return 0
 
 
-def _command_calibrate_sam3(args: argparse.Namespace) -> int:
-    class_name = _validate_class_name(args.class_name)
-    output = (
-        Path(
-            args.output or Path(args.sam3_threshold_policy_root) / f"{class_name}.json"
-        )
-        .expanduser()
-        .resolve()
-    )
-    if output.exists() and not args.overwrite:
-        raise ValueError(
-            f"SAM3 threshold policy already exists: {output}; "
-            "choose a different --output path or pass --overwrite explicitly"
-        )
-    standard_path = args.standard or str(
-        Path(args.template_root) / f"{class_name}.standard.rules"
-    )
-    standard_rules = parse_template(
-        Path(standard_path).read_text(encoding="utf-8"),
-        allow_missing_values=False,
-    )
-    input_normal_images = _resolve_normal_images(args)
-    missing_images = [str(path) for path in input_normal_images if not path.is_file()]
-    if missing_images:
-        raise ValueError(
-            "normal calibration images not found: " + ", ".join(missing_images)
-        )
-    progress = _progress_reporter("sam3-threshold")
-    normal_images = filter_decodable_images(
-        input_normal_images,
-        progress_callback=progress,
-    )
-    if len(normal_images) < 2:
-        raise ValueError(
-            "SAM3 calibration needs at least two decodable normal images " "after skips"
-        )
-    retained = set(normal_images)
-    retained_indices = tuple(
-        index for index, path in enumerate(input_normal_images) if path in retained
-    )
-
-    if args.truth_templates and (args.truth_counts or args.truth_subject_counts):
-        raise ValueError(
-            "use either --truth-templates or inline truth counts, not both"
-        )
-    if args.truth_subject_counts:
-        count_subjects = {
-            rule.subject
-            for rule in standard_rules
-            if rule.task.value in {"COUNT", "LENGTH", "AREA"} and rule.subject
-        }
-        subject_counts: dict[str, tuple[int, ...]] = {}
-        for raw_values in args.truth_subject_counts:
-            subject = raw_values[0]
-            if subject in subject_counts:
-                raise ValueError(f"duplicate inline truth counts for {subject!r}")
-            if subject not in count_subjects:
-                raise ValueError(
-                    f"--truth-subject-counts subject {subject!r} is not a COUNT "
-                    "subject in the standard template"
-                )
-            values = tuple(int(value) for value in raw_values[1:])
-            if len(values) != len(input_normal_images):
-                raise ValueError(
-                    f"--truth-subject-counts for {subject!r} needs "
-                    f"{len(input_normal_images)} values, found {len(values)}"
-                )
-            if any(value < 0 for value in values):
-                raise ValueError(
-                    "inline truth count values must be non-negative integers"
-                )
-            subject_counts[subject] = tuple(values[index] for index in retained_indices)
-        variable_count_subjects = {
-            rule.subject
-            for rule in standard_rules
-            if (
-                rule.task.value in {"COUNT", "LENGTH", "AREA"}
-                and rule.subject
-                and isinstance(
-                    rule.expected if rule.task.value == "COUNT" else rule.count,
-                    tuple,
-                )
-                and len(rule.expected if rule.task.value == "COUNT" else rule.count) > 1
-            )
-        }
-        missing_subjects = sorted(variable_count_subjects - subject_counts.keys())
-        if missing_subjects:
-            raise ValueError(
-                "missing inline truth counts for variable COUNT subjects: "
-                + ", ".join(missing_subjects)
-            )
-        truth_rules = tuple(
-            tuple(
-                (
-                    replace(
-                        rule,
-                        expected=(
-                            (subject_counts[rule.subject][sample_index],)
-                            if rule.task.value == "COUNT"
-                            else rule.expected
-                        ),
-                        count=(
-                            (subject_counts[rule.subject][sample_index],)
-                            if rule.task.value in {"LENGTH", "AREA"}
-                            else rule.count
-                        ),
-                    )
-                    if (
-                        rule.task.value in {"COUNT", "LENGTH", "AREA"}
-                        and rule.subject in subject_counts
-                    )
-                    else rule
-                )
-                for rule in standard_rules
-            )
-            for sample_index in range(len(normal_images))
-        )
-        truth_paths = None
-    elif args.truth_counts:
-        variable_count_subjects = {
-            rule.subject
-            for rule in standard_rules
-            if (
-                rule.task.value in {"COUNT", "LENGTH", "AREA"}
-                and rule.subject
-                and isinstance(
-                    rule.expected if rule.task.value == "COUNT" else rule.count,
-                    tuple,
-                )
-                and len(rule.expected if rule.task.value == "COUNT" else rule.count) > 1
-            )
-        }
-        if args.truth_subject:
-            if args.truth_subject not in {
-                rule.subject
-                for rule in standard_rules
-                if rule.task.value in {"COUNT", "LENGTH", "AREA"}
-            }:
-                raise ValueError(
-                    f"--truth-subject {args.truth_subject!r} is not a COUNT subject "
-                    "in the standard template"
-                )
-            truth_subject = args.truth_subject
-        elif len(variable_count_subjects) == 1:
-            truth_subject = next(iter(variable_count_subjects))
-        else:
-            raise ValueError(
-                "--truth-counts needs --truth-subject when the standard template "
-                "has zero or multiple variable COUNT subjects"
-            )
-        truth_counts = tuple(int(value) for value in args.truth_counts)
-        if len(truth_counts) != len(input_normal_images):
-            raise ValueError(
-                f"--truth-counts needs {len(input_normal_images)} values, "
-                f"found {len(truth_counts)}"
-            )
-        if any(value < 0 for value in truth_counts):
-            raise ValueError("--truth-counts values must be non-negative integers")
-        truth_counts = tuple(truth_counts[index] for index in retained_indices)
-        truth_rules = tuple(
-            tuple(
-                (
-                    replace(rule, expected=(count,))
-                    if rule.task.value == "COUNT" and rule.subject == truth_subject
-                    else (
-                        replace(rule, count=(count,))
-                        if rule.task.value in {"LENGTH", "AREA"}
-                        and rule.subject == truth_subject
-                        else rule
-                    )
-                )
-                for rule in standard_rules
-            )
-            for count in truth_counts
-        )
-        truth_paths = None
-    elif args.truth_templates:
-        input_truth_paths = tuple(
-            Path(path).expanduser().resolve() for path in args.truth_templates
-        )
-        missing_templates = [
-            str(path) for path in input_truth_paths if not path.is_file()
-        ]
-        if missing_templates:
-            raise ValueError(
-                "truth templates not found: " + ", ".join(missing_templates)
-            )
-        if len(input_truth_paths) != len(input_normal_images):
-            raise ValueError(
-                f"--truth-templates needs {len(input_normal_images)} paths, "
-                f"found {len(input_truth_paths)}"
-            )
-        truth_paths = tuple(input_truth_paths[index] for index in retained_indices)
-        truth_rules = tuple(
-            parse_template(path.read_text(encoding="utf-8"), allow_missing_values=False)
-            for path in truth_paths
-        )
-    else:
-        truth_paths = (Path(standard_path).expanduser().resolve(),) * len(normal_images)
-        truth_rules = tuple(standard_rules for _ in normal_images)
-
-    segmenter = Sam3Segmenter(
-        repo_path=args.sam3_repo,
-        checkpoint_path=args.sam3_checkpoint,
-        device=args.device,
-        confidence_threshold=args.sam3_threshold,
-        prompt_template=args.sam3_prompt,
-    )
-    result = calibrate_sam3_thresholds(
-        class_name=class_name,
-        normal_images=normal_images,
-        truth_rules_by_image=truth_rules,
-        segmenter=segmenter,
-        mask_processor=MaskPostprocessor(
-            dedup_iou_threshold=args.mask_dedup_iou,
-            dedup_containment_threshold=args.mask_dedup_containment,
-            dedup_enabled=args.mask_dedup,
-        ),
-        proposal_threshold=args.sam3_threshold,
-        selection_method=args.threshold_selection_method,
-        configuration=_sam3_threshold_configuration(args, standard_path=standard_path),
-        truth_template_paths=truth_paths,
-        progress_callback=progress,
-    )
-    result_path = (
-        Path(args.calibration_result_root).expanduser().resolve()
-        / output.parent.name
-        / f"{class_name}.json"
-    )
-    result["saved_path"] = str(output)
-    result["calibration_result_path"] = str(result_path)
-    saved_result_path = save_sam3_threshold_calibration_result(
-        result,
-        result_path,
-    )
-    saved_path = save_sam3_threshold_policy(result, output)
-    progress("saved", len(normal_images), len(normal_images), str(saved_path))
-    result["saved_path"] = str(saved_path)
-    result["calibration_result_path"] = str(saved_result_path)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["status"] == "complete" else 2
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pro-innovation")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1099,6 +816,13 @@ def build_parser() -> argparse.ArgumentParser:
     save.add_argument("--template-root", default="templates/store")
     save.add_argument("--overwrite", action="store_true")
     save.set_defaults(func=_command_save_standard)
+    from .template_generation.cli import add_arguments, run
+
+    generate = subparsers.add_parser(
+        "generate-templates", help="generate CQT/NRT from normal images and UTS with the configured VLM"
+    )
+    add_arguments(generate)
+    generate.set_defaults(func=run)
     cache_sam3 = subparsers.add_parser(
         "cache-sam3",
         help="precompute reusable SAM3 proposals without running rules or DINO",
@@ -1167,74 +891,7 @@ def build_parser() -> argparse.ArgumentParser:
         "calibrate-sam3-thresholds",
         help="derive fixed per-object SAM3 thresholds from all train/good images",
     )
-    calibrate_sam3.add_argument("--class-name", required=True)
-    calibrate_normal_source = calibrate_sam3.add_mutually_exclusive_group(required=True)
-    calibrate_normal_source.add_argument("--normal-images", nargs="+")
-    calibrate_normal_source.add_argument(
-        "--normal-dir", help="directory containing all train/good calibration images"
-    )
-    calibrate_sam3.add_argument(
-        "--truth-templates",
-        nargs="+",
-        help="optional sample-specific concrete templates, one per normal image",
-    )
-    calibrate_sam3.add_argument(
-        "--truth-counts",
-        nargs="+",
-        type=int,
-        help="per-image COUNT truths; expands a variable COUNT rule in memory without requiring sample-specific template files",
-    )
-    calibrate_sam3.add_argument(
-        "--truth-subject", help="COUNT subject to replace when --truth-counts is used"
-    )
-    calibrate_sam3.add_argument(
-        "--truth-subject-counts",
-        nargs="+",
-        action="append",
-        metavar="SUBJECT_OR_COUNT",
-        help="repeatable SUBJECT followed by one count per normal image",
-    )
-    calibrate_sam3.add_argument(
-        "--template-root", default="/home/lxq/pro-innovation/templates/store"
-    )
-    calibrate_sam3.add_argument("--standard")
-    calibrate_sam3.add_argument("--output")
-    calibrate_sam3.add_argument(
-        "--calibration-result-root",
-        default=DEFAULT_SAM3_THRESHOLD_RESULT_ROOT,
-        help="directory for full calibration reports; runtime policy stays minimal",
-    )
-    calibrate_sam3.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="explicitly allow replacing an existing threshold policy",
-    )
-    calibrate_sam3.add_argument(
-        "--sam3-threshold-policy-root", default=DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT
-    )
-    calibrate_sam3.add_argument("--device", default="cuda")
-    calibrate_sam3.add_argument(
-        "--sam3-threshold",
-        type=_probability_argument,
-        default=CALIBRATION_PROPOSAL_THRESHOLD,
-        help="candidate-generation threshold for calibration in [0, 1] (default: 0.20)",
-    )
-    calibrate_sam3.add_argument(
-        "--threshold-selection-method",
-        choices=CALIBRATION_SELECTION_METHODS,
-        default="confidence_gap_midpoint",
-        help="confidence_gap_midpoint computes the Q95/Q05 interval midpoint and rounds it downward to the 0.10 grid",
-    )
-    calibrate_sam3.add_argument("--mask-dedup-iou", type=float, default=0.8)
-    calibrate_sam3.add_argument("--mask-dedup-containment", type=float, default=0.85)
-    calibrate_sam3.add_argument(
-        "--mask-dedup", action=argparse.BooleanOptionalAction, default=True
-    )
-    calibrate_sam3.add_argument("--sam3-prompt", default="{category}")
-    calibrate_sam3.add_argument("--sam3-repo", default="/home/lxq/models/SAM3")
-    calibrate_sam3.add_argument(
-        "--sam3-checkpoint", default="/home/lxq/weights/sam3/sam3.pt"
-    )
+    add_sam3_calibration_arguments(calibrate_sam3)
     calibrate_sam3.set_defaults(func=_command_calibrate_sam3)
     infer = subparsers.add_parser(
         "infer", help="run local SAM3 rules with optional Patch matching"

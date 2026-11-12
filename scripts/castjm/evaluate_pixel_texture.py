@@ -49,7 +49,7 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate the pure-texture GPPL head with existing Global Patch banks; "
-            "SAM3, templates, threshold policies, and CASTJM joint memories are not used."
+            "SAM3, templates, threshold policies, and CAST-JM joint memories are not used."
         )
     )
     parser.add_argument("--dataset", choices=SUPPORTED_PIXEL_DATASETS, required=True)

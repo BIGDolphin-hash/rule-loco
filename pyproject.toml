@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pro-innovation"
 version = "0.1.0"
-description = "Rule-guided visual anomaly detection with CASTJM and Global Patch memories"
+description = "Rule-guided visual anomaly detection with CAST-JM and Global Patch memories"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

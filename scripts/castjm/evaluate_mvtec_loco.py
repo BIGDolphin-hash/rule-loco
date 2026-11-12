@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate isolated CASTJM on one MVTec LOCO class."""
+"""Evaluate isolated CAST-JM on one MVTec LOCO class."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from pro_innovation.templates import collect_categories, parse_template
 
 
 def _arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate isolated CASTJM")
+    parser = argparse.ArgumentParser(description="Evaluate isolated CAST-JM")
     parser.add_argument("--class-name", required=True)
     parser.add_argument("--dataset", choices=SUPPORTED_DATASETS, default=MVTEC_LOCO)
     parser.add_argument("--dataset-root", required=True)
@@ -39,7 +39,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--global-bank", required=True)
     parser.add_argument(
         "--joint-bank",
-        help="required only when a threshold policy enables joint CASTJM scoring",
+        help="required only when a threshold policy enables joint CAST-JM scoring",
     )
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--device", default="cuda")
@@ -121,7 +121,7 @@ def main() -> int:
         categories: tuple[str, ...] = ()
         missing: tuple[str, ...] = ()
         print(
-            "[CASTJM] no threshold policy; returning the Global Patch anomaly "
+            "[CAST-JM] no threshold policy; returning the Global Patch anomaly "
             "score directly without segmentation or joint-memory processing",
             flush=True,
         )
@@ -130,7 +130,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed CASTJM requires template or threshold-policy categories"
+                "SAM3-backed CAST-JM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -139,7 +139,7 @@ def main() -> int:
         )
         if missing:
             print(
-                "[CASTJM] warning: threshold policy is missing "
+                "[CAST-JM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
@@ -310,7 +310,7 @@ def main() -> int:
         if label == 1
     }
     summary = {
-        "module": "Global Patch" if whole_image_mode else "CASTJM",
+        "module": "Global Patch" if whole_image_mode else "CAST-JM",
         "class_name": args.class_name,
         "dataset": args.dataset,
         "splits": list(splits),

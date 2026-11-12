@@ -1,7 +1,7 @@
-"""CASTJM memory construction, persistence, and runtime scoring.
+"""CAST-JM memory construction, persistence, and runtime scoring.
 
 Global Patch supplies intermediate texture statistics only; it does not emit a
-second image-level score in this module.  CASTJM owns every descriptor and
+second image-level score in this module.  CAST-JM owns every descriptor and
 runtime dependency used by the joint memory.
 """
 
@@ -108,7 +108,7 @@ def global_patch_texture_signature(
     ordered = tuple(str(category) for category in categories)
     if not ordered or len(set(ordered)) != len(ordered):
         raise MemoryBankError(
-            "CASTJM categories must be unique and non-empty"
+            "CAST-JM categories must be unique and non-empty"
         )
     if not isfinite(float(top_fraction)) or not 0.0 < float(top_fraction) <= 1.0:
         raise ValueError("Global Patch top fraction must be in (0, 1]")
@@ -212,9 +212,9 @@ class CASTJMMemoryBank:
         count = len(self.normal_images)
         category_count = len(self.categories)
         if not self.class_name or not self.categories:
-            raise MemoryBankError("CASTJM identity is empty")
+            raise MemoryBankError("CAST-JM identity is empty")
         if len(set(self.categories)) != category_count:
-            raise MemoryBankError("CASTJM categories must be unique")
+            raise MemoryBankError("CAST-JM categories must be unique")
         if self.category_memory.ndim != 3 or self.category_memory.shape[:2] != (
             count,
             category_count,
@@ -223,7 +223,7 @@ class CASTJMMemoryBank:
         if self.texture_memory.shape != (count, category_count + 1, 3):
             raise MemoryBankError("ordered texture memory has an invalid shape")
         if count < 2 or len(set(self.normal_images)) != count:
-            raise MemoryBankError("CASTJM memory needs distinct images")
+            raise MemoryBankError("CAST-JM memory needs distinct images")
         if not all(
             torch.isfinite(value).all()
             for value in (
@@ -235,7 +235,7 @@ class CASTJMMemoryBank:
                 self.texture_std,
             )
         ):
-            raise MemoryBankError("CASTJM memory is non-finite")
+            raise MemoryBankError("CAST-JM memory is non-finite")
         category_dimension = int(self.category_memory.shape[2])
         if self.category_mean.shape != (category_count, category_dimension):
             raise MemoryBankError("ordered category mean has an invalid shape")
@@ -246,9 +246,9 @@ class CASTJMMemoryBank:
         if self.texture_std.shape != self.texture_mean.shape:
             raise MemoryBankError("ordered texture std has an invalid shape")
         if (self.category_std < 0).any() or (self.texture_std < 0).any():
-            raise MemoryBankError("CASTJM std is negative")
+            raise MemoryBankError("CAST-JM std is negative")
         if not isfinite(self.loo_max_distance) or self.loo_max_distance <= 0.0:
-            raise MemoryBankError("CASTJM LOO scale must be positive")
+            raise MemoryBankError("CAST-JM LOO scale must be positive")
         if not 0.0 <= self.texture_weight <= 1.0:
             raise MemoryBankError("texture weight must be in [0, 1]")
         if not 0.0 < self.top_fraction <= 1.0:
@@ -391,7 +391,7 @@ class CASTJMMemoryBank:
     ) -> CASTJMEvidence:
         if tuple(features.feature_grid) != self.feature_grid:
             raise MemoryBankError(
-                "query feature grid does not match CASTJM memory"
+                "query feature grid does not match CAST-JM memory"
             )
         vector, slices = category_only_embedding(features, mask_pool, self.categories)
         category_raw = torch.stack(
@@ -504,7 +504,7 @@ class CASTJMMemoryBank:
             with np.load(source, allow_pickle=False) as archive:
                 metadata = json.loads(str(archive["metadata"].item()))
                 if metadata.get("schema") != CASTJM_MEMORY_SCHEMA:
-                    raise MemoryBankError("unsupported CASTJM schema")
+                    raise MemoryBankError("unsupported CAST-JM schema")
                 bank = cls(
                     class_name=metadata["class_name"],
                     categories=metadata["categories"],
@@ -527,14 +527,14 @@ class CASTJMMemoryBank:
             raise
         except Exception as exc:
             raise MemoryBankError(
-                f"cannot load CASTJM memory {source}: {exc}"
+                f"cannot load CAST-JM memory {source}: {exc}"
             ) from exc
         if expected_class_name is not None and bank.class_name != expected_class_name:
-            raise MemoryBankError("CASTJM class does not match")
+            raise MemoryBankError("CAST-JM class does not match")
         if expected_categories is not None and bank.categories != tuple(
             expected_categories
         ):
-            raise MemoryBankError("CASTJM categories do not match")
+            raise MemoryBankError("CAST-JM categories do not match")
         for actual, expected, label in (
             (bank.checkpoint_path, expected_checkpoint_path, "checkpoint"),
             (
@@ -546,7 +546,7 @@ class CASTJMMemoryBank:
             if expected is not None and actual != str(
                 Path(expected).expanduser().resolve()
             ):
-                raise MemoryBankError(f"CASTJM {label} does not match")
+                raise MemoryBankError(f"CAST-JM {label} does not match")
         return bank
 
 
@@ -602,7 +602,7 @@ class CASTJMScorer:
         *,
         output_size: tuple[int, int],
     ) -> tuple[CASTJMEvidence, GlobalPatchPixelLocalization]:
-        """Emit image-level CASTJM evidence and Pixel localization from one map."""
+        """Emit image-level CAST-JM evidence and Pixel localization from one map."""
 
         _, anomaly_map = self.global_patch_scorer.score_features_with_map(features)
         evidence = self.bank.score_features(features, mask_pool, anomaly_map)

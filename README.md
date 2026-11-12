@@ -4,9 +4,9 @@ RuleAD 是一个面向工业视觉异常检测的研究实现。当前活动模�
 
 - **Stage 1：Visual Evidence-grounded Rule Verifier（视觉证据驱动的规则验证器）**。执行数量、长度、面积、空间关系和属性组合约束；任一有效规则 `FAIL` 时，直接输出异常分数 `1` 并终止；
 - **BAER：级间证据路由器**。读取规则汇总状态，决定终止、返回未确定状态或送入后级；
-- **Stage 2：CASTJM**（Category-Aligned Semantic–Texture Joint Memory，类别对齐的语义—纹理联合记忆）。只有全部规则 `PASS` 的样本才进入后级，在同一正常参考下联合匹配固定类别槽位的对象语义与区域纹理偏差，输出一个异常分数。
+- **Stage 2：CAST-JM**（Category-Aligned Semantic–Texture Joint Memory，类别对齐的语义—纹理联合记忆）。只有全部规则 `PASS` 的样本才进入后级，在同一正常参考下联合匹配固定类别槽位的对象语义与区域纹理偏差，输出一个异常分数。
 
-**默认完整框架是规则驱动的 CASTJM 级联。** Global Patch 为 CASTJM 提供中间纹理异常图，也可独立用于纯纹理检测、定位或消融。独立 Global Patch 检测不是默认完整模型。
+**默认完整框架是规则驱动的 CAST-JM 级联。** Global Patch 为 CAST-JM 提供中间纹理异常图，也可独立用于纯纹理检测、定位或消融。独立 Global Patch 检测不是默认完整模型。
 
 系统不更新 SAM3、CLIP 或 DINOv2 的参数。正常图像用于分割阈值和尺寸范围标定，以及非参数记忆构建。每条已执行规则保留实际值、期望值、满足分数、违反分数和错误信息，便于复核异常来源。
 
@@ -35,17 +35,17 @@ flowchart LR
     RF --> X([终止])
     E -- UNKNOWN --> U[返回未确定状态]
 
-    subgraph B[Stage 2：CASTJM]
+    subgraph B[Stage 2：CAST-JM]
         D[共享 DINOv2 ViT-L/14-Reg4<br/>Block 6/12/18/24]
         D --> HJ[固定类别槽位的对象语义]
         D --> G[Global Patch 异常图]
         G --> TJ[类别区域及背景纹理统计]
         HJ --> J[同一正常参考联合匹配]
         TJ --> J
-        J --> Q[输出 CASTJM 异常分数]
+        J --> Q[输出 CAST-JM 异常分数]
     end
 
-    E -- PASS：路由至 CASTJM --> D
+    E -- PASS：路由至 CAST-JM --> D
     I -. 通过门控后读取图像 .-> D
     M -. 复用对象 Mask .-> HJ
     M -. 定义类别及背景区域 .-> TJ
@@ -57,7 +57,7 @@ flowchart LR
     style B fill:#eef6ff,stroke:#2b6cb0,stroke-width:2px
 ```
 
-这张图描述默认完整模型的在线语义：**规则 FAIL 是终止节点；BAER 负责级间路由；CASTJM 只接收全部规则 PASS 的样本**。无 FAIL 但存在规则执行错误时，返回 `UNKNOWN` 并跳过后级。并行调度用于对照实验，取二值规则分数与 CASTJM 分数的最大值。
+这张图描述默认完整模型的在线语义：**规则 FAIL 是终止节点；BAER 负责级间路由；CAST-JM 只接收全部规则 PASS 的样本**。无 FAIL 但存在规则执行错误时，返回 `UNKNOWN` 并跳过后级。并行调度用于对照实验，取二值规则分数与 CAST-JM 分数的最大值。
 
 ### 1.1 ViCSpec 规则模板
 
@@ -111,22 +111,22 @@ violation_score    = v_i = 1 - s_i
 
 规则按模板顺序执行，在首个有效 `FAIL` 处停止。推理同时生成 `filled_template`，回填已执行规则的实际观测；提前退出时只包含已执行部分。
 
-### 1.4 CASTJM：默认后级联合记忆
+### 1.4 CAST-JM：默认后级联合记忆
 
-CASTJM 复用共享 Mask 池，并在规则全部通过后进行一次 DINOv2 特征提取：
+CAST-JM 复用共享 Mask 池，并在规则全部通过后进行一次 DINOv2 特征提取：
 
 1. **类别语义**：逐实例、逐层进行 Mask 平均池化与归一化，跨层汇总，再按 Mask 面积加权同类实例，形成固定类别顺序的语义描述。类别槽位不表示空间顺序或显式成对关系。
 2. **区域纹理**：从 Global Patch 异常图提取各类别 Mask 并集及背景的均值、最高 `10%` 响应均值和最大值。不同类别区域允许重叠，背景为全部类别区域并集的补集。
 3. **联合匹配**：两类描述使用正常参考统计逐维标准化，对每张正常参考计算加权联合距离，然后选择一个共同的最近参考。默认纹理权重为 `0.30`。
 4. **正常标定**：正常纹理描述排除当前图像贡献的 Patch；联合记忆使用排除自身的最近邻距离最大值作为正常边界。
 
-CASTJM 只输出一个图像级联合异常分数。Global Patch 的图像级分数不与该分数相加。
+CAST-JM 只输出一个图像级联合异常分数。Global Patch 的图像级分数不与该分数相加。
 
-实现位于 `src/pro_innovation/memory_modules/castjm/`；完整级联入口为 `scripts/castjm/evaluate_rule_castjm_mvtec_loco.py`，建库入口为 `scripts/castjm/build_memory.py`。
+实现位于 `src/pro_innovation/memory_modules/castjm/`；完整级联入口为 `scripts/castjm/evaluate_rule_castjm_mvtec_loco.py`，建库入口为 `scripts/castjm/build_memory.py`。对外名称统一为 `CAST-JM`；Python 类名（如 `CASTJMMemoryBank`）、`castjm` 包路径、命令行选项和已保存记忆库的 schema 使用原有机器标识，以保持导入、续跑和记忆库加载兼容。
 
 ### 1.5 Global Patch 与纯纹理定位
 
-Global Patch 使用本地 DINOv2 ViT-L/14-Reg4，为 CASTJM 提供中间纹理异常图：
+Global Patch 使用本地 DINOv2 ViT-L/14-Reg4，为 CAST-JM 提供中间纹理异常图：
 
 - 输入尺寸：`448 × 448`；
 - 特征层：Block `6 / 12 / 18 / 24`；
@@ -138,7 +138,7 @@ Global Patch 使用本地 DINOv2 ViT-L/14-Reg4，为 CASTJM 提供中间纹理�
 
 独立 Global Patch 检测以异常图的空间最大值作为原始图像分数，并使用正常参考标定。GPPL 纯纹理定位头将该异常图恢复到评测分辨率，不调用类别语义、SAM3 或联合记忆；实现位于 `src/pro_innovation/memory_modules/castjm/pixel_texture.py`，评测入口为 `scripts/castjm/evaluate_pixel_texture.py`。
 
-独立 Global Patch 模块与 CASTJM 分别位于 `memory_modules/global_patch` 和 `memory_modules/castjm`，模块之间不相互导入；CASTJM 拥有独立的 Global Patch 银行读取与评分实现，并复用 DINOv2 适配器。
+独立 Global Patch 模块与 CAST-JM 分别位于 `memory_modules/global_patch` 和 `memory_modules/castjm`，模块之间不相互导入；CAST-JM 拥有独立的 Global Patch 银行读取与评分实现，并复用 DINOv2 适配器。
 
 ### 1.6 筛选式级联与 BAER 路由
 
@@ -148,16 +148,16 @@ Global Patch 使用本地 DINOv2 ViT-L/14-Reg4，为 CASTJM 提供中间纹理�
 2. BAER 读取规则状态并执行级间路由；
 3. 存在有效 `FAIL`：立即输出异常分数 `1` 并终止；
 4. 无 `FAIL` 但存在 `UNKNOWN`：返回未确定状态，不运行后级；
-5. 全部 `PASS`：BAER 将样本路由至 CASTJM，输出联合记忆异常证据。
+5. 全部 `PASS`：BAER 将样本路由至 CAST-JM，输出联合记忆异常证据。
 
-CASTJM 使用联合最近邻原始距离 `d_joint` 和正常留一距离最大值 `T_joint` 评分：
+CAST-JM 使用联合最近邻原始距离 `d_joint` 和正常留一距离最大值 `T_joint` 评分：
 
 ```text
 r_joint = d_joint / T_joint
 image_anomaly_score = r_joint / (r_joint + 1)
 ```
 
-完整 CASTJM 入口固定使用 `tau=1.0`，`r_joint > 1` 时判定异常。连续分数用于排序和 AUROC，不表示经过标签校准的真实概率。
+完整 CAST-JM 入口固定使用 `tau=1.0`，`r_joint > 1` 时判定异常。连续分数用于排序和 AUROC，不表示经过标签校准的真实概率。
 
 四张正常图像用于分割阈值标定，不代表完整系统为 4-shot；正常记忆和部分尺寸范围使用的样本量需要分别记录。
 
@@ -167,7 +167,7 @@ image_anomaly_score = r_joint / (r_joint + 1)
 rule-loco/
 ├── src/pro_innovation/
 │   ├── adapters/              # SAM3、CLIP、DINOv2 本地适配器
-│   ├── memory_modules/         # Global Patch、CASTJM 独立模块
+│   ├── memory_modules/         # Global Patch、CAST-JM 独立模块
 │   ├── cli.py                 # 命令行入口与运行配置
 │   ├── templates.py           # 规则解析、序列化和模板对齐
 │   ├── pipeline.py            # 二值规则、BAER 路由与后级记忆接口
@@ -182,9 +182,9 @@ rule-loco/
 ├── scripts/
 │   ├── fill_measurement_templates.py  # 正常图像标定 LENGTH/AREA 范围
 │   └── castjm/
-│       ├── build_memory.py            # CASTJM 联合记忆建库
+│       ├── build_memory.py            # CAST-JM 联合记忆建库
 │       ├── evaluate_rule_castjm_mvtec_loco.py  # 默认完整级联
-│       ├── evaluate_mvtec_loco.py     # 独立 CASTJM 评测
+│       ├── evaluate_mvtec_loco.py     # 独立 CAST-JM 评测
 │       └── evaluate_pixel_texture.py  # 纯纹理定位评测
 ├── config/
 │   ├── attributes/           # 属性候选词表
@@ -210,10 +210,10 @@ rule-loco/
 
 - 本地 SAM3 源码与 checkpoint；
 - 本地 OpenAI CLIP 源码与 ViT-L/14 checkpoint（仅复杂语义属性需要）；
-- DINOv2 ViT-L/14-Reg4 checkpoint（CASTJM 和独立 Global Patch 需要）；
+- DINOv2 ViT-L/14-Reg4 checkpoint（CAST-JM 和独立 Global Patch 需要）；
 - MVTec LOCO、MVTec AD 或 VisA 数据集。
 
-模型适配器只读取本地路径，不会自动下载权重。源码中的默认路径对应原始开发环境；在其他机器上请显式传入模型、数据集和记忆库路径。CASTJM 脚本使用 `--dino-checkpoint`，通用 CLI 使用 `--patch-dinov2-checkpoint`。
+模型适配器只读取本地路径，不会自动下载权重。源码中的默认路径对应原始开发环境；在其他机器上请显式传入模型、数据集和记忆库路径。CAST-JM 脚本使用 `--dino-checkpoint`，通用 CLI 使用 `--patch-dinov2-checkpoint`。
 
 ### 3.2 安装
 
@@ -246,7 +246,7 @@ PYTHONPATH=src python scripts/castjm/build_memory.py --help
 PYTHONPATH=src python scripts/castjm/evaluate_rule_castjm_mvtec_loco.py --help
 ```
 
-默认完整框架使用 CASTJM 脚本入口。通用 CLI 的 `infer` / `evaluate` 保留规则单独运行及独立 Global Patch 路径，以下示例按用途区分。
+默认完整框架使用 CAST-JM 脚本入口。通用 CLI 的 `infer` / `evaluate` 保留规则单独运行及独立 Global Patch 路径，以下示例按用途区分。
 
 ## 4. 快速开始
 
@@ -388,9 +388,9 @@ PYTHONPATH=src python -m pro_innovation infer \
 --clip-checkpoint /path/to/ViT-L-14.pt
 ```
 
-### 4.3 默认完整 CASTJM 级联
+### 4.3 默认完整 CAST-JM 级联
 
-完成 SAM3 阈值标定、Global Patch 基础库和 CASTJM 联合库构建后，使用以下入口逐图运行完整级联。Visual Evidence-grounded Rule Verifier 是第一阶段，BAER 负责级间路由，CASTJM 是第二阶段。
+完成 SAM3 阈值标定、Global Patch 基础库和 CAST-JM 联合库构建后，使用以下入口逐图运行完整级联。Visual Evidence-grounded Rule Verifier 是第一阶段，BAER 负责级间路由，CAST-JM 是第二阶段。
 
 ```bash
 PYTHONPATH=src python scripts/castjm/evaluate_rule_castjm_mvtec_loco.py \
@@ -414,7 +414,7 @@ PYTHONPATH=src python scripts/castjm/evaluate_rule_castjm_mvtec_loco.py \
 
 ## 5. 正常记忆与阈值构建
 
-默认完整框架依次准备 5.1 的 SAM3 阈值、5.2 的 Global Patch 基础库和 5.3 的 CASTJM 联合库。两个记忆库需要使用同一组、同一顺序的正常参考图像。
+默认完整框架依次准备 5.1 的 SAM3 阈值、5.2 的 Global Patch 基础库和 5.3 的 CAST-JM 联合库。两个记忆库需要使用同一组、同一顺序的正常参考图像。
 
 ### 5.1 标定类别级 SAM3 阈值
 
@@ -479,7 +479,7 @@ result = generate_sam3_thresholds(
 
 `config/sam3_thresholds/confidence_gap_midpoint_4-shot/` 同时提供原实验五个类别的阈值策略。文件中的 `calibration_images` 仅记录原标定图像路径，不包含图像；切换数据集、权重或对象定义后应重新标定。以下建库和完整评测使用的阈值策略必须一致。
 
-当前 `breakfast_box` 策略未为 `banana slices`、`box` 和 `almonds` 单独设置阈值；CASTJM 建库与完整评测入口会提示缺失项，并使用 `--sam3-threshold`（默认 `0.40`）回退。复现实验时，建库和评测应传入相同的回退值；也可重新标定以补全类别阈值。
+当前 `breakfast_box` 策略未为 `banana slices`、`box` 和 `almonds` 单独设置阈值；CAST-JM 建库与完整评测入口会提示缺失项，并使用 `--sam3-threshold`（默认 `0.40`）回退。复现实验时，建库和评测应传入相同的回退值；也可重新标定以补全类别阈值。
 
 ### 5.2 构建 Global Patch 基础库
 
@@ -493,9 +493,9 @@ PYTHONPATH=src python -m pro_innovation build-patch-memory \
   --device cuda
 ```
 
-该基础库为 CASTJM 提供正常 Patch 参考和纹理异常图，也支持独立纯纹理评测。
+该基础库为 CAST-JM 提供正常 Patch 参考和纹理异常图，也支持独立纯纹理评测。
 
-### 5.3 构建 CASTJM 联合记忆
+### 5.3 构建 CAST-JM 联合记忆
 
 ```bash
 PYTHONPATH=src python scripts/castjm/build_memory.py \
@@ -517,15 +517,15 @@ PYTHONPATH=src python scripts/castjm/build_memory.py \
 
 ## 6. 数据集评测
 
-CASTJM 评测脚本和通用 CLI 的 `evaluate` 支持：
+CAST-JM 评测脚本和通用 CLI 的 `evaluate` 支持：
 
 - `mvtec_loco`：固定的 `good`、`logical_anomalies`、`structural_anomalies`；
 - `mvtec_ad`：自动发现 `good` 之外的缺陷目录；
 - `visa`：读取官方 `split_csv/1cls.csv`。
 
-默认完整 CASTJM 级联使用 4.3 的命令。CASTJM 脚本的 `--dataset-root` 对 MVTec LOCO / MVTec AD 指向类别的 `test` 目录，对 VisA 指向包含 `split_csv/1cls.csv` 的数据集根目录。
+默认完整 CAST-JM 级联使用 4.3 的命令。CAST-JM 脚本的 `--dataset-root` 对 MVTec LOCO / MVTec AD 指向类别的 `test` 目录，对 VisA 指向包含 `split_csv/1cls.csv` 的数据集根目录。
 
-完整 CASTJM 评测需要同时提供有效的模板、阈值策略、Global Patch 基础库和联合库。该脚本在缺少有效阈值策略时会直接运行 Global Patch，关闭分割与联合记忆；缺少模板时会关闭规则执行。这些简化路径不代表默认完整框架。
+完整 CAST-JM 评测需要同时提供有效的模板、阈值策略、Global Patch 基础库和联合库。该脚本在缺少有效阈值策略时会直接运行 Global Patch，关闭分割与联合记忆；缺少模板时会关闭规则执行。这些简化路径不代表默认完整框架。
 
 独立 Global Patch 消融使用通用 CLI，不需要模板或 SAM3：
 
@@ -541,7 +541,7 @@ PYTHONPATH=src python -m pro_innovation evaluate \
   --device cuda
 ```
 
-CASTJM 入口按已有 `all.jsonl` 中的图像路径续跑；配置或逻辑改变时应使用新的结果目录或 `--restart`，避免复用旧记录。通用 CLI 按参数匹配的 JSONL 续跑。
+CAST-JM 入口按已有 `all.jsonl` 中的图像路径续跑；配置或逻辑改变时应使用新的结果目录或 `--restart`，避免复用旧记录。通用 CLI 按参数匹配的 JSONL 续跑。
 
 ### 6.1 纯纹理 Pixel 评测
 
@@ -567,18 +567,18 @@ PYTHONPATH=src python scripts/castjm/evaluate_pixel_texture.py \
   --device cuda
 ```
 
-`--bank-root` 指向已在本机建立的逐类别 Global Patch 库目录；`full` 模式要求文件名匹配 `<class-name>.dino_full_*.npz`，每个类别恰好一份。可用第 5.2 节的建库入口，将 `--output` 指定为该目录下符合此命名的文件。`--shot` 还支持 `1`、`2`、`4`，对应文件名为 `<class-name>.dino_<shot>shot_fullpatch.npz`；不传 `--bank-root` 时，脚本按 shot 自动选择默认目录。该入口不读取模板、自定义分割阈值文件、SAM3 或 CASTJM 联合记忆库。
+`--bank-root` 指向已在本机建立的逐类别 Global Patch 库目录；`full` 模式要求文件名匹配 `<class-name>.dino_full_*.npz`，每个类别恰好一份。可用第 5.2 节的建库入口，将 `--output` 指定为该目录下符合此命名的文件。`--shot` 还支持 `1`、`2`、`4`，对应文件名为 `<class-name>.dino_<shot>shot_fullpatch.npz`；不传 `--bank-root` 时，脚本按 shot 自动选择默认目录。该入口不读取模板、自定义分割阈值文件、SAM3 或 CAST-JM 联合记忆库。
 
 ## 7. 输出与运行模式
 
-默认 CASTJM 入口通过 `--schedule` 选择调度；通用 CLI 的对应参数为 `--rule-memory-schedule`：
+默认 CAST-JM 入口通过 `--schedule` 选择调度；通用 CLI 的对应参数为 `--rule-memory-schedule`：
 
-- `binary-selective`（默认）：规则使用 0/1 分数，首个有效 FAIL 即退出并输出 1；全部 PASS 才运行 CASTJM；无 FAIL 但存在 UNKNOWN 时返回未确定状态。
-- `binary-parallel`：共享分割后并行运行规则与 CASTJM，最终取二者分数最大值；规则分支仍在首个 FAIL 时停止。
+- `binary-selective`（默认）：规则使用 0/1 分数，首个有效 FAIL 即退出并输出 1；全部 PASS 才运行 CAST-JM；无 FAIL 但存在 UNKNOWN 时返回未确定状态。
+- `binary-parallel`：共享分割后并行运行规则与 CAST-JM，最终取二者分数最大值；规则分支仍在首个 FAIL 时停止。
 
 旧的连续规则评分模式 `selective`、`parallel` 已移除，传入这些名称会报配置错误。后置记忆检测的连续异常分数保留。
 
-默认 CASTJM 入口在逐图 `all.jsonl` 中记录：
+默认 CAST-JM 入口在逐图 `all.jsonl` 中记录：
 
 - `score`：最终图像级异常分数；
 - `execution_mode`：实际执行路径；
@@ -593,21 +593,21 @@ PYTHONPATH=src python scripts/castjm/evaluate_pixel_texture.py \
 - `categories`、`mask_counts`：模板类别及最终 Mask 数量；
 - `results`：各规则的实际值、期望值、满足/违反分数和证据有效性；
 - `filled_template`：观测值回填后的模板；
-- `patch_evidence`：独立 Global Patch 的距离、标定与纹理比率证据；默认 CASTJM 路径为 `null`，因为 Global Patch 只提供内部纹理异常图；
-- `composition_evidence`：CASTJM 后置记忆证据；这是保留的接口字段名，在默认评测输出中写为 `castjm_evidence`。
+- `patch_evidence`：独立 Global Patch 的距离、标定与纹理比率证据；默认 CAST-JM 路径为 `null`，因为 Global Patch 只提供内部纹理异常图；
+- `composition_evidence`：CAST-JM 后置记忆证据；这是保留的接口字段名，在默认评测输出中写为 `castjm_evidence`。
 
 实现中可能出现以下标准或消融运行模式：
 
 | 模式 | 含义 |
 |---|---|
-| `rule_binary_dual_post` | 默认 CASTJM 路径全部规则通过后执行联合记忆；模式名沿用内部接口，不表示两个图像分数相加 |
+| `rule_binary_dual_post` | 默认 CAST-JM 路径全部规则通过后执行联合记忆；模式名沿用内部接口，不表示两个图像分数相加 |
 | `rule_binary_early_exit` | 规则 FAIL，提前退出并输出异常分数 1 |
-| `rule_binary_memory_parallel` | 二值规则与 CASTJM 的并行对照，取分数最大值 |
+| `rule_binary_memory_parallel` | 二值规则与 CAST-JM 的并行对照，取分数最大值 |
 | `rule_binary_only` | 仅运行二值规则筛选，或在无 FAIL 但存在 UNKNOWN 时返回未确定状态 |
 | `rule_binary_patch` | 兼容路径：二值规则通过后运行独立 Global Patch |
 | `patch_only` | 关闭规则筛选，仅运行 Global Patch 消融 |
 
-`composition_only` 表示关闭规则后执行联合记忆；`dual_post` 是内部同时接入独立 Patch 与组合评分器的兼容模式，不属于默认 CASTJM 级联。
+`composition_only` 表示关闭规则后执行联合记忆；`dual_post` 是内部同时接入独立 Patch 与组合评分器的兼容模式，不属于默认 CAST-JM 级联。
 
 `infer` 的退出码：正常为 `0`，检测到异常为 `1`，配置或运行失败为 `2`。
 

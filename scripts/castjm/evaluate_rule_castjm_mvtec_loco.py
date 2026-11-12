@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate CASTJM, optionally preceded by the five binary rules."""
+"""Evaluate CAST-JM, optionally preceded by the five binary rules."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from pro_innovation.templates import collect_categories, parse_template
 
 
 def _arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run CASTJM/FiveRules evaluation")
+    parser = argparse.ArgumentParser(description="Run CAST-JM/FiveRules evaluation")
     parser.add_argument("--class-name", required=True)
     parser.add_argument(
         "--dataset-root",
@@ -61,15 +61,15 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--joint-bank",
         help=(
-            "required for threshold-backed CASTJM; ignored by no-threshold "
-            "CASTJM, which returns the Global Patch score directly"
+            "required for threshold-backed CAST-JM; ignored by no-threshold "
+            "CAST-JM, which returns the Global Patch score directly"
         ),
     )
     parser.add_argument(
         "--memory-module",
         choices=("castjm",),
         default="castjm",
-        help="compatibility option; CASTJM is the only supported memory module",
+        help="compatibility option; CAST-JM is the only supported memory module",
     )
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--device", default="cuda")
@@ -113,7 +113,7 @@ def _arguments() -> argparse.Namespace:
         default=RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
         help=(
             "binary-selective returns 1 on the first failed rule and runs "
-            "CASTJM only when all rules pass; binary-parallel runs both "
+            "CAST-JM only when all rules pass; binary-parallel runs both "
             "branches and takes the maximum of their scores"
         ),
     )
@@ -236,7 +236,7 @@ def _initialize_models(
 
 def main() -> int:
     args = _arguments()
-    module_label = "CASTJM"
+    module_label = "CAST-JM"
     dataset = Path(args.dataset_root).expanduser().resolve()
     generic_path = Path(args.generic).expanduser().resolve() if args.generic else None
     standard_path = (
@@ -291,7 +291,7 @@ def main() -> int:
         categories: tuple[str, ...] = ()
         missing: tuple[str, ...] = ()
         print(
-            "[CASTJM] no threshold policy; returning the Global Patch anomaly "
+            "[CAST-JM] no threshold policy; returning the Global Patch anomaly "
             "score directly without segmentation or joint-memory processing",
             flush=True,
         )
@@ -300,7 +300,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed CASTJM requires template or threshold-policy categories"
+                "SAM3-backed CAST-JM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -309,7 +309,7 @@ def main() -> int:
         )
         if missing:
             print(
-                "[Rule+CASTJM] warning: threshold policy is missing "
+                "[Rule+CAST-JM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
@@ -340,7 +340,7 @@ def main() -> int:
         memory_scorer: Any = global_patch_scorer
     elif not args.joint_bank:
         raise ValueError(
-            "--joint-bank is required unless CASTJM runs without a threshold policy"
+            "--joint-bank is required unless CAST-JM runs without a threshold policy"
         )
     else:
         memory_bank = CASTJMMemoryBank.load(
@@ -602,9 +602,9 @@ def main() -> int:
             else module_label
             if not rules_enabled
             else (
-                "FiveRules-Binary+CASTJM-Parallel"
+                "FiveRules-Binary+CAST-JM-Parallel"
                 if binary_parallel
-                else "FiveRules-Binary+CASTJM"
+                else "FiveRules-Binary+CAST-JM"
             )
         ),
         "class_name": args.class_name,

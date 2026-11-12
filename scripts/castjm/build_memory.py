@@ -90,7 +90,7 @@ def main() -> int:
         categories = (args.class_name,)
         missing: tuple[str, ...] = ()
         print(
-            "[CASTJM] no threshold policy; treating the complete image as "
+            "[CAST-JM] no threshold policy; treating the complete image as "
             f"one {args.class_name!r} object without SAM3",
             flush=True,
         )
@@ -99,7 +99,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed CASTJM requires template or threshold-policy categories"
+                "SAM3-backed CAST-JM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -108,7 +108,7 @@ def main() -> int:
         )
         if missing:
             print(
-                "[CASTJM] warning: threshold policy is missing "
+                "[CAST-JM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
@@ -206,7 +206,7 @@ def main() -> int:
             )
         completed = min(start + len(batch), total)
         print(
-            f"[CASTJM] {args.class_name}: {completed}/{total} "
+            f"[CAST-JM] {args.class_name}: {completed}/{total} "
             f"({completed / total * 100:.1f}%)",
             flush=True,
         )
@@ -229,7 +229,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "module": "CASTJM",
+                "module": "CAST-JM",
                 "bank": str(output),
                 "class_name": bank.class_name,
                 "categories": list(bank.categories),

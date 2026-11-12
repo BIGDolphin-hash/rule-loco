@@ -1,6 +1,6 @@
 """Template-driven rule and patch anomaly detection.
 
-Global Patch and CASTJM provide post-rule memory detection.
+Global Patch and CAST-JM provide post-rule memory detection.
 """
 
 from .models import (

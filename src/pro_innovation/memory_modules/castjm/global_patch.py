@@ -1,8 +1,8 @@
-"""CASTJM-private reader and scorer for Global Patch bank files.
+"""CAST-JM-private reader and scorer for Global Patch bank files.
 
 This code deliberately does not import the standalone Global Patch module.
-CASTJM owns this implementation so changes in another memory module cannot
-silently change CASTJM behavior.
+CAST-JM owns this implementation so changes in another memory module cannot
+silently change CAST-JM behavior.
 """
 
 from __future__ import annotations
@@ -55,12 +55,12 @@ def _image(image: Any) -> Image.Image:
             return converted.copy()
     array = np.asarray(image)
     if array.ndim != 3 or array.shape[2] not in {3, 4}:
-        raise MemoryBankError(f"CASTJM expected an RGB image, got {array.shape}")
+        raise MemoryBankError(f"CAST-JM expected an RGB image, got {array.shape}")
     return Image.fromarray(array[..., :3].astype(np.uint8), mode="RGB")
 
 
 class CASTJMGlobalPatchBank:
-    """CASTJM-owned immutable view of a Global Patch bank."""
+    """CAST-JM-owned immutable view of a Global Patch bank."""
 
     def __init__(
         self,
@@ -110,32 +110,32 @@ class CASTJMGlobalPatchBank:
 
     def _validate(self) -> None:
         if self.layers != PATCH_MATCHING_LAYERS:
-            raise MemoryBankError("CASTJM Global Patch layers do not match DINOv2")
+            raise MemoryBankError("CAST-JM Global Patch layers do not match DINOv2")
         if len(self.normal_images) < 1 or len(set(self.normal_images)) != len(
             self.normal_images
         ):
-            raise MemoryBankError("CASTJM Global Patch references are invalid")
+            raise MemoryBankError("CAST-JM Global Patch references are invalid")
         if self.input_size != PATCH_MATCHING_INPUT_SIZE:
-            raise MemoryBankError("CASTJM Global Patch input size is unsupported")
+            raise MemoryBankError("CAST-JM Global Patch input size is unsupported")
         if self.score_unbiased_std <= 0.0 or not np.isfinite(self.score_unbiased_std):
-            raise MemoryBankError("CASTJM Global Patch calibration is invalid")
+            raise MemoryBankError("CAST-JM Global Patch calibration is invalid")
         if self.memory_source_indices.ndim != 1:
-            raise MemoryBankError("CASTJM Global Patch source index is invalid")
+            raise MemoryBankError("CAST-JM Global Patch source index is invalid")
         rows = int(self.memory_source_indices.numel())
         if rows <= 0:
-            raise MemoryBankError("CASTJM Global Patch memory is empty")
+            raise MemoryBankError("CAST-JM Global Patch memory is empty")
         dimensions = set()
         for layer, values in self.feature_memory.items():
             if values.ndim != 2 or values.shape[0] != rows:
-                raise MemoryBankError(f"CASTJM Global Patch Block {layer} is invalid")
+                raise MemoryBankError(f"CAST-JM Global Patch Block {layer} is invalid")
             if not torch.isfinite(values).all():
-                raise MemoryBankError(f"CASTJM Global Patch Block {layer} is non-finite")
+                raise MemoryBankError(f"CAST-JM Global Patch Block {layer} is non-finite")
             dimensions.add(int(values.shape[1]))
         if len(dimensions) != 1:
-            raise MemoryBankError("CASTJM Global Patch dimensions differ by layer")
+            raise MemoryBankError("CAST-JM Global Patch dimensions differ by layer")
         represented = set(int(value) for value in self.memory_source_indices.tolist())
         if represented != set(range(len(self.normal_images))):
-            raise MemoryBankError("CASTJM Global Patch references are incomplete")
+            raise MemoryBankError("CAST-JM Global Patch references are incomplete")
 
     @staticmethod
     def _load_storage(
@@ -157,7 +157,7 @@ class CASTJMGlobalPatchBank:
             )
             return memory, indices
         if storage != _SHARDED_STORAGE:
-            raise MemoryBankError(f"unsupported CASTJM Global Patch storage: {storage}")
+            raise MemoryBankError(f"unsupported CAST-JM Global Patch storage: {storage}")
         store_name = metadata.get("image_shard_store")
         entries = metadata.get("image_shards")
         if (
@@ -166,23 +166,23 @@ class CASTJMGlobalPatchBank:
             or not isinstance(entries, list)
             or len(entries) != len(metadata["normal_images"])
         ):
-            raise MemoryBankError("CASTJM Global Patch shard manifest is invalid")
+            raise MemoryBankError("CAST-JM Global Patch shard manifest is invalid")
         chunks: dict[int, list[torch.Tensor]] = {layer: [] for layer in layers}
         source_chunks: list[torch.Tensor] = []
         for image_index, entry in enumerate(entries):
             if not isinstance(entry, dict) or entry.get("image_index") != image_index:
-                raise MemoryBankError("CASTJM Global Patch shard identity is invalid")
+                raise MemoryBankError("CAST-JM Global Patch shard identity is invalid")
             shard_name = entry.get("file")
             if not isinstance(shard_name, str) or Path(shard_name).name != shard_name:
-                raise MemoryBankError("CASTJM Global Patch shard name is invalid")
+                raise MemoryBankError("CAST-JM Global Patch shard name is invalid")
             shard_path = source.parent / store_name / shard_name
             if not shard_path.is_file() or _sha256_file(shard_path) != entry.get(
                 "sha256"
             ):
-                raise MemoryBankError(f"CASTJM Global Patch shard {image_index} failed")
+                raise MemoryBankError(f"CAST-JM Global Patch shard {image_index} failed")
             with zipfile.ZipFile(shard_path) as shard_zip:
                 if shard_zip.testzip() is not None:
-                    raise MemoryBankError("CASTJM Global Patch shard CRC failed")
+                    raise MemoryBankError("CAST-JM Global Patch shard CRC failed")
             with np.load(shard_path, allow_pickle=False) as shard:
                 shard_metadata = json.loads(str(shard["metadata"].item()))
                 count = int(entry.get("patch_count", -1))
@@ -192,14 +192,14 @@ class CASTJMGlobalPatchBank:
                     or tuple(shard_metadata.get("layers", ())) != layers
                     or shard_metadata.get("patch_count") != count
                 ):
-                    raise MemoryBankError("CASTJM Global Patch shard metadata differs")
+                    raise MemoryBankError("CAST-JM Global Patch shard metadata differs")
                 for layer in layers:
                     values = shard[f"features_block_{layer}"].astype(
                         np.float32, copy=False
                     )
                     if values.shape[0] != count:
                         raise MemoryBankError(
-                            "CASTJM Global Patch shard row count differs"
+                            "CAST-JM Global Patch shard row count differs"
                         )
                     chunks[layer].append(torch.from_numpy(values.copy()))
             source_chunks.append(torch.full((count,), image_index, dtype=torch.long))
@@ -218,16 +218,16 @@ class CASTJMGlobalPatchBank:
     ) -> "CASTJMGlobalPatchBank":
         source = Path(path).expanduser().resolve()
         if not source.is_file():
-            raise MemoryBankError(f"CASTJM Global Patch bank not found: {source}")
+            raise MemoryBankError(f"CAST-JM Global Patch bank not found: {source}")
         try:
             with zipfile.ZipFile(source) as manifest_zip:
                 if manifest_zip.testzip() is not None:
-                    raise MemoryBankError("CASTJM Global Patch manifest CRC failed")
+                    raise MemoryBankError("CAST-JM Global Patch manifest CRC failed")
             with np.load(source, allow_pickle=False) as archive:
                 metadata = json.loads(str(archive["metadata"].item()))
                 if metadata.get("schema") != _BANK_SCHEMA:
                     raise MemoryBankError(
-                        "CASTJM received an unsupported Global Patch bank"
+                        "CAST-JM received an unsupported Global Patch bank"
                     )
                 layers = tuple(int(value) for value in metadata["layers"])
                 memory, indices = cls._load_storage(source, archive, metadata, layers)
@@ -249,14 +249,14 @@ class CASTJMGlobalPatchBank:
             raise
         except Exception as exc:
             raise MemoryBankError(
-                f"cannot load CASTJM Global Patch bank {source}: {exc}"
+                f"cannot load CAST-JM Global Patch bank {source}: {exc}"
             ) from exc
         if expected_class_name is not None and bank.class_name != expected_class_name:
-            raise MemoryBankError("CASTJM Global Patch class does not match runtime")
+            raise MemoryBankError("CAST-JM Global Patch class does not match runtime")
         if expected_checkpoint_path is not None:
             expected = str(Path(expected_checkpoint_path).expanduser().resolve())
             if bank.checkpoint_path != expected:
-                raise MemoryBankError("CASTJM Global Patch checkpoint does not match")
+                raise MemoryBankError("CAST-JM Global Patch checkpoint does not match")
         return bank
 
     def _raw_maps(
@@ -268,15 +268,15 @@ class CASTJMGlobalPatchBank:
         excluded_reference: int | None = None,
     ) -> tuple[dict[str, float], torch.Tensor]:
         if tuple(features.feature_grid) != self.feature_grid:
-            raise MemoryBankError("CASTJM query grid does not match Global Patch")
+            raise MemoryBankError("CAST-JM query grid does not match Global Patch")
         if tuple(sorted(features.layer_features)) != self.layers:
-            raise MemoryBankError("CASTJM query layers do not match Global Patch")
+            raise MemoryBankError("CAST-JM query layers do not match Global Patch")
         if query_batch_size <= 0:
-            raise ValueError("CASTJM query batch size must be positive")
+            raise ValueError("CAST-JM query batch size must be positive")
         if excluded_reference is not None and not (
             0 <= int(excluded_reference) < len(self.normal_images)
         ):
-            raise ValueError("CASTJM excluded reference index is out of range")
+            raise ValueError("CAST-JM excluded reference index is out of range")
         positions = self.feature_grid[0] * self.feature_grid[1]
         dimension = next(iter(self.feature_memory.values())).shape[1]
         for layer in self.layers:
@@ -285,7 +285,7 @@ class CASTJMGlobalPatchBank:
                 values.shape != (positions, dimension)
                 or not torch.isfinite(values).all()
             ):
-                raise MemoryBankError(f"CASTJM query Block {layer} is invalid")
+                raise MemoryBankError(f"CAST-JM query Block {layer} is invalid")
         maps: list[torch.Tensor] = []
         scores: dict[str, float] = {}
         with torch.inference_mode():
@@ -296,7 +296,7 @@ class CASTJMGlobalPatchBank:
                         self.memory_source_indices != int(excluded_reference)
                     ]
                 if references.shape[0] == 0:
-                    raise MemoryBankError("CASTJM leave-one-out memory is empty")
+                    raise MemoryBankError("CAST-JM leave-one-out memory is empty")
                 references = references.to(device)
                 query = _normalize(features.layer_features[layer]).to(device)
                 chunks = []
@@ -336,7 +336,7 @@ class CASTJMGlobalPatchBank:
         raw_score = float(anomaly_map.max().item())
         scale = self.psad_scale
         if scale is None:
-            raise MemoryBankError("CASTJM Global Patch normal-reference scale is unavailable")
+            raise MemoryBankError("CAST-JM Global Patch normal-reference scale is unavailable")
         ratio = raw_score / scale
         calibrated = ratio / (ratio + 1.0)
         standardized: float | None = (
@@ -388,7 +388,7 @@ class CASTJMGlobalPatchBank:
 
 
 class CASTJMGlobalPatchScorer:
-    """CASTJM-owned image adapter for its private Global Patch bank."""
+    """CAST-JM-owned image adapter for its private Global Patch bank."""
 
     def __init__(
         self,
@@ -399,14 +399,14 @@ class CASTJMGlobalPatchScorer:
         extraction_batch_size: int = 4,
     ) -> None:
         if bank.checkpoint_path != str(extractor.checkpoint_path):
-            raise MemoryBankError("CASTJM Global Patch checkpoint differs from DINOv2")
+            raise MemoryBankError("CAST-JM Global Patch checkpoint differs from DINOv2")
         if (
             bank.feature_grid != extractor.feature_grid
             or bank.layers != extractor.layers
         ):
-            raise MemoryBankError("CASTJM Global Patch shape differs from DINOv2")
+            raise MemoryBankError("CAST-JM Global Patch shape differs from DINOv2")
         if query_batch_size <= 0 or extraction_batch_size <= 0:
-            raise ValueError("CASTJM batch sizes must be positive")
+            raise ValueError("CAST-JM batch sizes must be positive")
         self.bank = bank
         self.extractor = extractor
         self.query_batch_size = int(query_batch_size)
@@ -417,7 +417,7 @@ class CASTJMGlobalPatchScorer:
             [_image(image)], batch_size=self.extraction_batch_size
         )
         if len(bundles) != 1:
-            raise MemoryBankError("CASTJM DINOv2 returned an unexpected batch size")
+            raise MemoryBankError("CAST-JM DINOv2 returned an unexpected batch size")
         return bundles[0]
 
     def score_features(self, features: PatchFeatureBundle) -> PatchEvidence:

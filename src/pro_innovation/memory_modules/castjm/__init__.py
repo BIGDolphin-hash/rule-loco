@@ -1,4 +1,4 @@
-"""CASTJM: Category-Aligned Semantic–Texture Joint Memory.
+"""CAST-JM: Category-Aligned Semantic–Texture Joint Memory.
 
 Public API for the independent semantic and texture joint-memory module.
 """

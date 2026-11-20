@@ -108,6 +108,38 @@ class Sam3Segmenter:
 
         self._load()
 
+    def segment_at_threshold(
+        self, image: Any, categories: Sequence[str], *, threshold: float
+    ) -> dict[str, tuple[MaskInstance, ...]]:
+        """Apply a calibration cutoff to the model, cache and returned candidates.
+
+        Reuse the loaded model across attempts. Restore inference thresholds,
+        including category overrides, even when segmentation raises an error.
+        """
+
+        cutoff = self._validate_threshold(threshold, "calibration threshold")
+        previous_confidence = self.confidence_threshold
+        previous_categories = self.category_thresholds
+        previous_proposal = self.proposal_threshold
+        previous_processor_threshold = (
+            self._processor.confidence_threshold
+            if self._processor is not None
+            else previous_proposal
+        )
+        try:
+            self.confidence_threshold = cutoff
+            self.category_thresholds = {}
+            self.proposal_threshold = cutoff
+            if self._processor is not None:
+                self._processor.set_confidence_threshold(cutoff)
+            return self.segment(image, categories)
+        finally:
+            self.confidence_threshold = previous_confidence
+            self.category_thresholds = previous_categories
+            self.proposal_threshold = previous_proposal
+            if self._processor is not None:
+                self._processor.set_confidence_threshold(previous_processor_threshold)
+
     @staticmethod
     def _image(image: Any) -> Image.Image:
         if isinstance(image, Image.Image):

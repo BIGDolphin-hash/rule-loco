@@ -120,7 +120,9 @@ def _validate_response(
         raise TemplateError("generated templates must not contain comments")
     try:
         cqt = parse_template(data["cqt"], allow_missing_values=True)
-        nrt = parse_template(data["nrt"], allow_missing_values=False)
+        nrt = parse_template(
+            data["nrt"], allow_missing_values=False, allow_unknown_values=True
+        )
         validate_template_alignment(cqt, nrt)
         validate_generated_rules(nrt, uts, dimensions)
     except TemplateError:

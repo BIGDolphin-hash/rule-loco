@@ -39,7 +39,7 @@ def save_sam3_threshold_calibration_result(
         return index + 1
 
     marker_index = 0
-    for key in ("proposal_threshold", "threshold_grid_step"):
+    for key in ("proposal_threshold", "minimum_proposal_threshold", "threshold_grid_step"):
         marker_index = fixed_two_decimals(serializable, key, marker_index)
     selected = serializable.get("selected_thresholds")
     if isinstance(selected, dict):
@@ -50,9 +50,12 @@ def save_sam3_threshold_calibration_result(
         for category in sorted(calibrations):
             entry = calibrations.get(category)
             if isinstance(entry, dict):
-                marker_index = fixed_two_decimals(
-                    entry, "selected_threshold", marker_index
-                )
+                for key in ("selected_threshold", "proposal_threshold"):
+                    marker_index = fixed_two_decimals(entry, key, marker_index)
+                for attempt in entry.get("attempts", []):
+                    if isinstance(attempt, dict):
+                        for key in ("selected_threshold", "proposal_threshold"):
+                            marker_index = fixed_two_decimals(attempt, key, marker_index)
 
     text = json.dumps(serializable, ensure_ascii=False, indent=2)
     for marker, fixed_value in replacements.items():

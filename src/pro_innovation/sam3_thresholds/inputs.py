@@ -10,6 +10,7 @@ from ..image_validation import ProgressCallback, filter_decodable_images
 from ..models import Rule, TaskType
 from ..templates import parse_template
 from .config import MINIMUM_CALIBRATION_SAMPLE_COUNT
+from .truth import extract_count_truths_by_image
 
 
 _COUNT_TASKS = {TaskType.COUNT, TaskType.LENGTH, TaskType.AREA}
@@ -57,11 +58,16 @@ def _count_values(rule: Rule) -> object:
 def _replace_counts(
     rules: Sequence[Rule], counts: Mapping[str, int]
 ) -> tuple[Rule, ...]:
+    explicit_count_subjects = {
+        rule.subject for rule in rules if rule.task is TaskType.COUNT
+    }
     return tuple(
         replace(rule, expected=(counts[rule.subject],))
         if rule.task is TaskType.COUNT and rule.subject in counts
         else replace(rule, count=(counts[rule.subject],))
-        if rule.task in {TaskType.LENGTH, TaskType.AREA} and rule.subject in counts
+        if rule.task in {TaskType.LENGTH, TaskType.AREA}
+        and rule.subject in counts
+        and rule.subject not in explicit_count_subjects
         else rule
         for rule in rules
     )
@@ -80,8 +86,9 @@ def prepare_calibration_inputs(
 ) -> CalibrationInputs:
     """Align truth with readable images, including after corrupt-image skips.
 
-    Use the standard template, one concrete template per image, or inline
-    per-image counts. Inline counts always follow the original image order.
+    Use a single-valued standard template, one concrete template per image,
+    or inline per-image counts. Every calibratable quantity must resolve to
+    one integer before inference. Inline counts follow the original image order.
     """
 
     sources = (truth_templates, truth_counts, truth_subject_counts)
@@ -94,7 +101,8 @@ def prepare_calibration_inputs(
         raise ValueError("--truth-subject requires --truth-counts")
     standard = Path(standard_path).expanduser().resolve()
     standard_rules = parse_template(
-        standard.read_text(encoding="utf-8"), allow_missing_values=False
+        standard.read_text(encoding="utf-8"), allow_missing_values=False,
+        allow_deferred_lengths=True, allow_unknown_values=True,
     )
     input_images = resolve_normal_images(
         normal_images=normal_images, normal_dir=normal_dir
@@ -110,6 +118,23 @@ def prepare_calibration_inputs(
     retained = set(images)
     indices = tuple(i for i, path in enumerate(input_images) if path in retained)
 
+    subjects = tuple(dict.fromkeys(
+        rule.subject
+        for rule in standard_rules
+        if rule.task in _COUNT_TASKS and rule.subject
+    ))
+
+    def validated_inputs(
+        rules: tuple[tuple[Rule, ...], ...], paths: tuple[Path, ...] | None
+    ) -> CalibrationInputs:
+        extract_count_truths_by_image(
+            normal_images=images,
+            truth_rules_by_image=rules,
+            truth_template_paths=paths,
+            expected_subjects=subjects,
+        )
+        return CalibrationInputs(standard, images, rules, paths)
+
     if truth_templates is not None:
         paths = tuple(Path(path).expanduser().resolve() for path in truth_templates)
         missing = [str(path) for path in paths if not path.is_file()]
@@ -121,16 +146,13 @@ def prepare_calibration_inputs(
             )
         paths = tuple(paths[index] for index in indices)
         rules = tuple(
-            parse_template(path.read_text(encoding="utf-8"), allow_missing_values=False)
+            parse_template(
+                path.read_text(encoding="utf-8"), allow_missing_values=False,
+                allow_deferred_lengths=True, allow_unknown_values=True,
+            )
             for path in paths
         )
-        return CalibrationInputs(standard, images, rules, paths)
-
-    subjects = {
-        rule.subject
-        for rule in standard_rules
-        if rule.task in _COUNT_TASKS and rule.subject
-    }
+        return validated_inputs(rules, paths)
     variable_subjects = {
         rule.subject
         for rule in standard_rules
@@ -149,7 +171,7 @@ def prepare_calibration_inputs(
                 )
             truth_subject = next(iter(variable_subjects))
         overrides[truth_subject] = truth_counts
-    if truth_subject_counts is not None:
+    if truth_counts is not None or truth_subject_counts is not None:
         missing_subjects = sorted(variable_subjects - overrides.keys())
         if missing_subjects:
             raise ValueError(
@@ -181,7 +203,7 @@ def prepare_calibration_inputs(
             )
             for i in indices
         )
-        return CalibrationInputs(standard, images, rules, None)
-    return CalibrationInputs(
-        standard, images, tuple(standard_rules for _ in images), (standard,) * len(images)
+        return validated_inputs(rules, None)
+    return validated_inputs(
+        tuple(standard_rules for _ in images), (standard,) * len(images)
     )

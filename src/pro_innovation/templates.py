@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from math import isfinite
 import re
 from typing import Iterable, Mapping
 
 from .errors import TemplateError
-from .models import AttributeTarget, Rule, RuleValue, Scalar, TaskType
+from .models import AttributeTarget, CountValues, Rule, RuleValue, Scalar, TaskType, UnknownValue
 
 _RULE_RE = re.compile(r"^\[(?P<rule_id>[A-Za-z][A-Za-z0-9_-]*)\]\s*(?P<body>.+)$")
 _INDEXED_RE = re.compile(r"^(SUBJECT|PROPERTY|VALUE)_(\d+)$")
@@ -20,6 +21,8 @@ def _parse_scalar(text: str) -> Scalar:
     if not value:
         raise TemplateError("VALUE cannot be empty")
     lowered = value.lower()
+    if lowered == "unknown":
+        return "unknown"
     if lowered == "true":
         return True
     if lowered == "false":
@@ -40,7 +43,7 @@ def _format_scalar(value: Scalar) -> str:
 
 
 def _parse_allowed_combinations(
-    text: str, rule_id: str, attribute_count: int
+    text: str, rule_id: str, attribute_count: int, *, allow_unknown_values: bool = False
 ) -> tuple[str, ...]:
     normalized = (
         text.strip()
@@ -66,12 +69,17 @@ def _parse_allowed_combinations(
             raise TemplateError(
                 f"{rule_id}: every allowed combination must be a non-empty string"
             )
-        labels = tuple(label.strip() for label in item.split(":"))
+        labels = tuple(
+            "unknown" if label.strip().lower() == "unknown" else label.strip()
+            for label in item.split(":")
+        )
         if len(labels) != attribute_count or any(not label for label in labels):
             raise TemplateError(
                 f"{rule_id}: combination {item!r} must contain "
                 f"{attribute_count} colon-separated values"
             )
+        if "unknown" in labels and not allow_unknown_values:
+            raise TemplateError(f"{rule_id}: resolve unknown attribute values before inference")
         combinations.append(":".join(labels))
     if len(set(combinations)) != len(combinations):
         raise TemplateError(f"{rule_id}: allowed combinations must be unique")
@@ -84,9 +92,14 @@ def _format_rule_value(value: RuleValue) -> str:
     return _format_scalar(value)
 
 
-def _parse_count_values(text: str, rule_id: str, field_name: str) -> tuple[int, ...]:
+def _parse_count_values(
+    text: str, rule_id: str, field_name: str, *, allow_unknown_values: bool = False
+) -> CountValues:
+    normalized = text.strip()
+    if allow_unknown_values:
+        normalized = re.sub(r'(?<=[\[,])\s*unknown\s*(?=[,\]])', '"unknown"', normalized, flags=re.I)
     try:
-        parsed = json.loads(text.strip())
+        parsed = json.loads(normalized)
     except json.JSONDecodeError as exc:
         raise TemplateError(
             f"{rule_id}: {field_name} must be a non-empty JSON array of "
@@ -98,7 +111,8 @@ def _parse_count_values(text: str, rule_id: str, field_name: str) -> tuple[int, 
             "non-negative integers"
         )
     if any(
-        not isinstance(item, int) or isinstance(item, bool) or item < 0
+        not (allow_unknown_values and item == "unknown")
+        and (not isinstance(item, int) or isinstance(item, bool) or item < 0)
         for item in parsed
     ):
         raise TemplateError(
@@ -109,7 +123,13 @@ def _parse_count_values(text: str, rule_id: str, field_name: str) -> tuple[int, 
     return tuple(parsed)
 
 
-def _parse_range(text: str, rule_id: str) -> tuple[float, float]:
+def _format_count_values(values: CountValues) -> str:
+    return "[" + ",".join("unknown" if value == "unknown" else str(value) for value in values) + "]"
+
+
+def _parse_range(
+    text: str, rule_id: str, *, allow_unknown_values: bool = False
+) -> tuple[float | UnknownValue, float | UnknownValue]:
     match = _RANGE_RE.fullmatch(text.strip())
     if not match:
         raise TemplateError(
@@ -117,17 +137,23 @@ def _parse_range(text: str, rule_id: str) -> tuple[float, float]:
         )
     parsed = tuple(_parse_scalar(item) for item in match.groups())
     if any(
-        not isinstance(item, (int, float)) or isinstance(item, bool)
+        not (allow_unknown_values and item == "unknown")
+        and (not isinstance(item, (int, float)) or isinstance(item, bool))
         for item in parsed
     ):
         raise TemplateError(f"{rule_id}: RANGE bounds must be numeric")
-    minimum, maximum = (float(item) for item in parsed)
-    if minimum < 0.0 or maximum < minimum:
+    minimum, maximum = ("unknown" if item == "unknown" else float(item) for item in parsed)
+    known = [value for value in (minimum, maximum) if value != "unknown"]
+    if any(not isfinite(value) or value < 0 for value in known):
+        raise TemplateError(f"{rule_id}: RANGE bounds must be finite and nonnegative")
+    if minimum != "unknown" and maximum != "unknown" and maximum < minimum:
         raise TemplateError(f"{rule_id}: RANGE requires 0 <= lower <= upper")
     return minimum, maximum
 
 
-def _format_number(value: float) -> str:
+def _format_number(value: float | UnknownValue) -> str:
+    if value == "unknown":
+        return "unknown"
     return str(int(value)) if float(value).is_integer() else str(value)
 
 
@@ -162,7 +188,8 @@ def _validate_unknown_fields(
 
 
 def _parse_attribute_combination(
-    rule_id: str, fields: Mapping[str, str], allow_missing_values: bool
+    rule_id: str, fields: Mapping[str, str], allow_missing_values: bool,
+    allow_unknown_values: bool = False,
 ) -> Rule:
     indexed: dict[int, dict[str, str]] = {}
     allowed = {"TASK", "OP", "VALUE"}
@@ -186,7 +213,9 @@ def _parse_attribute_combination(
 
     raw_total = fields.get("VALUE")
     allowed_combinations = (
-        _parse_allowed_combinations(raw_total, rule_id, len(expected_indexes))
+        _parse_allowed_combinations(
+            raw_total, rule_id, len(expected_indexes), allow_unknown_values=allow_unknown_values
+        )
         if raw_total is not None and raw_total.lstrip().startswith("[")
         else None
     )
@@ -201,6 +230,8 @@ def _parse_attribute_combination(
                 f"{rule_id}: PROPERTY_{index} must start with attribute."
             )
         expected = _parse_scalar(item["VALUE"]) if "VALUE" in item else None
+        if expected == "unknown" and not allow_unknown_values:
+            raise TemplateError(f"{rule_id}: resolve unknown attribute values before inference")
         if allowed_combinations is not None and expected is not None:
             raise TemplateError(
                 f"{rule_id}: allowed-combination VALUE cannot be mixed with VALUE_{index}"
@@ -229,6 +260,8 @@ def _parse_attribute_combination(
     )
     if expected is None and not allow_missing_values:
         raise TemplateError(f"{rule_id}: missing required field VALUE")
+    if expected == "unknown" and not allow_unknown_values:
+        raise TemplateError(f"{rule_id}: resolve unknown attribute values before inference")
     op = _require(fields, "OP", rule_id).upper()
     if op != "EQ":
         raise TemplateError(f"{rule_id}: V1 supports OP=EQ only")
@@ -253,11 +286,16 @@ def _parse_attribute_combination(
     )
 
 
-def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
+def parse_rule(
+    line: str, *, allow_missing_values: bool = False, allow_deferred_lengths: bool = False,
+    allow_unknown_values: bool = False,
+) -> Rule:
     """Parse one canonical rule line.
 
     Generic templates set ``allow_missing_values=True`` because their VALUE and
-    VALUE_n fields are intentionally absent.
+    VALUE_n fields are intentionally absent. Candidate NRTs may separately opt
+    into legacy LENGTH rules with COUNT but no VALUE. New candidate NRTs use
+    ``allow_unknown_values=True`` to preserve explicit unknown value slots.
     """
 
     match = _RULE_RE.match(line.strip())
@@ -273,7 +311,9 @@ def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
         raise TemplateError(f"{rule_id}: unsupported TASK={raw_task}; choose {choices}") from exc
 
     if task is TaskType.ATTRIBUTE_COMBINATION:
-        return _parse_attribute_combination(rule_id, fields, allow_missing_values)
+        return _parse_attribute_combination(
+            rule_id, fields, allow_missing_values, allow_unknown_values
+        )
 
     op = _require(fields, "OP", rule_id).upper()
     measurement_range = task in {TaskType.LENGTH, TaskType.AREA}
@@ -288,22 +328,32 @@ def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
     property_name = _require(fields, "PROPERTY", rule_id)
     object_name = fields.get("OBJECT")
     expected: RuleValue = None
-    minimum: float | None = None
-    maximum: float | None = None
-    count: tuple[int, ...] | None = None
+    minimum: float | UnknownValue | None = None
+    maximum: float | UnknownValue | None = None
+    count: CountValues | None = None
 
     if measurement_range:
         if op != "RANGE":
             raise TemplateError(f"{rule_id}: {task.value} requires OP=RANGE")
         has_value = "VALUE" in fields
         has_count = "COUNT" in fields
-        if has_value != has_count:
+        deferred_length = allow_deferred_lengths and task is TaskType.LENGTH and not has_value
+        if deferred_length and has_count:
+            count = _parse_count_values(
+                fields["COUNT"], rule_id, "COUNT", allow_unknown_values=allow_unknown_values
+            )
+        elif has_value != has_count:
             raise TemplateError(f"{rule_id}: RANGE requires both VALUE and COUNT")
         if not has_value and not allow_missing_values:
-            raise TemplateError(f"{rule_id}: missing required fields VALUE and COUNT")
+            if not deferred_length or not has_count:
+                raise TemplateError(f"{rule_id}: missing required fields VALUE and COUNT")
         if has_value:
-            minimum, maximum = _parse_range(fields["VALUE"], rule_id)
-            count = _parse_count_values(fields["COUNT"], rule_id, "COUNT")
+            minimum, maximum = _parse_range(
+                fields["VALUE"], rule_id, allow_unknown_values=allow_unknown_values
+            )
+            count = _parse_count_values(
+                fields["COUNT"], rule_id, "COUNT", allow_unknown_values=allow_unknown_values
+            )
     else:
         allowed_ops = (
             {"EQ", "GE"}
@@ -316,7 +366,9 @@ def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
                 f"{rule_id}: {task.value} supports OP={supported} only"
             )
         expected = (
-            _parse_count_values(fields["VALUE"], rule_id, "COUNT VALUE")
+            _parse_count_values(
+                fields["VALUE"], rule_id, "COUNT VALUE", allow_unknown_values=allow_unknown_values
+            )
             if task is TaskType.COUNT and "VALUE" in fields
             else _parse_scalar(fields["VALUE"])
             if "VALUE" in fields
@@ -324,8 +376,12 @@ def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
         )
         if expected is None and not allow_missing_values:
             raise TemplateError(f"{rule_id}: missing required field VALUE")
+        if expected == "unknown" and not allow_unknown_values:
+            raise TemplateError(f"{rule_id}: resolve unknown values before inference")
         if task is TaskType.SPATIAL_COMBINATION and "COUNT" in fields:
-            count = _parse_count_values(fields["COUNT"], rule_id, "COUNT")
+            count = _parse_count_values(
+                fields["COUNT"], rule_id, "COUNT", allow_unknown_values=allow_unknown_values
+            )
         if (
             task is TaskType.SPATIAL_COMBINATION
             and op == "GE"
@@ -363,7 +419,10 @@ def parse_rule(line: str, *, allow_missing_values: bool = False) -> Rule:
     )
 
 
-def parse_template(text: str, *, allow_missing_values: bool = False) -> tuple[Rule, ...]:
+def parse_template(
+    text: str, *, allow_missing_values: bool = False, allow_deferred_lengths: bool = False,
+    allow_unknown_values: bool = False,
+) -> tuple[Rule, ...]:
     rules = []
     seen: set[str] = set()
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
@@ -371,7 +430,11 @@ def parse_template(text: str, *, allow_missing_values: bool = False) -> tuple[Ru
         if not line or line.startswith("#"):
             continue
         try:
-            rule = parse_rule(line, allow_missing_values=allow_missing_values)
+            rule = parse_rule(
+                line, allow_missing_values=allow_missing_values,
+                allow_deferred_lengths=allow_deferred_lengths,
+                allow_unknown_values=allow_unknown_values,
+            )
         except TemplateError as exc:
             raise TemplateError(f"line {line_number}: {exc}") from exc
         if rule.rule_id in seen:
@@ -410,16 +473,23 @@ def serialize_rule(rule: Rule, *, include_values: bool = True) -> str:
             fields.extend(
                 [
                     f"VALUE=[{_format_number(rule.minimum)},{_format_number(rule.maximum)}]",
-                    f"COUNT={_format_rule_value(rule.count)}",
+                    f"COUNT={_format_count_values(rule.count)}",
                 ]
             )
         elif rule.expected is not None:
-            fields.append(f"VALUE={_format_rule_value(rule.expected)}")
+            value = (
+                _format_count_values(rule.expected)
+                if rule.task is TaskType.COUNT and isinstance(rule.expected, tuple)
+                else _format_rule_value(rule.expected)
+            )
+            fields.append(f"VALUE={value}")
             if (
                 rule.task is TaskType.SPATIAL_COMBINATION
                 and rule.count is not None
             ):
-                fields.append(f"COUNT={_format_rule_value(rule.count)}")
+                fields.append(f"COUNT={_format_count_values(rule.count)}")
+        elif rule.task is TaskType.LENGTH and rule.count is not None:
+            fields.append(f"COUNT={_format_count_values(rule.count)}")
     return f"[{rule.rule_id}] " + " | ".join(fields)
 
 

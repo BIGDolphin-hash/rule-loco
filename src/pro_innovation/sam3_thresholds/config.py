@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from math import isfinite
 from pathlib import Path
 import re
 from typing import Any
@@ -17,12 +18,18 @@ LEGACY_CALIBRATION_METHOD = (
     "full-normal-confidence-object-specific-q95-q05-maximum-count-"
     "proposal-dynamic-floor010-v7"
 )
+CALIBRATION_METHOD = (
+    "full-normal-confidence-object-specific-q95-q05-exact-per-image-count-"
+    "proposal-descending080-040-step010-floor010-v7"
+)
 CONFIDENCE_GAP_MIDPOINT_SELECTION = "confidence_gap_midpoint"
 CALIBRATION_SELECTION_METHODS = (
     CONFIDENCE_GAP_MIDPOINT_SELECTION,
 )
 MINIMUM_CALIBRATION_SAMPLE_COUNT = 2
-CALIBRATION_PROPOSAL_THRESHOLD = 0.20
+CALIBRATION_PROPOSAL_THRESHOLDS = (0.80, 0.70, 0.60, 0.50, 0.40)
+CALIBRATION_PROPOSAL_THRESHOLD = CALIBRATION_PROPOSAL_THRESHOLDS[0]
+DEFAULT_SAM3_CACHE_PROPOSAL_THRESHOLD = 0.20
 
 DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT = "/home/lxq/pro-innovation/config/sam3_thresholds"
 DEFAULT_SAM3_THRESHOLD_POLICY_ROOT = (
@@ -31,6 +38,23 @@ DEFAULT_SAM3_THRESHOLD_POLICY_ROOT = (
 DEFAULT_SAM3_THRESHOLD_RESULT_ROOT = (
     "/home/lxq/pro-innovation/results/calibration/sam3_threshold_calibration"
 )
+
+
+def calibration_threshold_schedule(start: float) -> tuple[float, ...]:
+    """Return descending proposal cutoffs, including the fixed 0.40 floor."""
+
+    threshold = float(start)
+    if not isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError(
+            "SAM3 candidate-generation threshold must be within [0.0, 1.0]"
+        )
+    for index, candidate in enumerate(CALIBRATION_PROPOSAL_THRESHOLDS):
+        if abs(threshold - candidate) <= 1e-12:
+            return CALIBRATION_PROPOSAL_THRESHOLDS[index:]
+    raise ValueError(
+        "SAM3 calibration starting threshold must be within [0.40, 0.80] "
+        "on the 0.10 grid"
+    )
 
 
 def build_sam3_threshold_configuration(
@@ -69,6 +93,9 @@ class Sam3CalibrationConfig:
     mask_dedup_iou: float = 0.80
     mask_dedup_containment: float = 0.85
     mask_dedup: bool = True
+
+    def __post_init__(self) -> None:
+        calibration_threshold_schedule(self.proposal_threshold)
 
     def configuration(self, standard_path: str | Path) -> dict[str, Any]:
         return build_sam3_threshold_configuration(

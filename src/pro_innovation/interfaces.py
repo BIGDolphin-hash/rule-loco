@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from .models import (
     AttributePrediction,
@@ -17,6 +17,14 @@ class Segmenter(Protocol):
         self, image: Any, categories: Sequence[str]
     ) -> Mapping[str, Sequence[MaskInstance]]:
         """Segment each unique category once and return its object instances."""
+
+
+@runtime_checkable
+class ThresholdSegmenter(Segmenter, Protocol):
+    def segment_at_threshold(
+        self, image: Any, categories: Sequence[str], *, threshold: float
+    ) -> Mapping[str, Sequence[MaskInstance]]:
+        """Generate proposals at an explicit cutoff without changing runtime settings."""
 
 
 class MaskProcessor(Protocol):

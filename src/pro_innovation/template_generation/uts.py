@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from math import hypot, isfinite
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -112,30 +111,28 @@ def validate_generated_rules(
             if not name.strip() or name != name.strip() or re.search(r"[|=\[\]\r\n]", name):
                 raise TemplateError(prefix + "object names contain invalid delimiters")
         signature = serialize_rule(rule).split("] ", 1)[1]
-        if signature in seen:
+        # Deferred size groups can have identical COUNT values; order is rank.
+        if signature in seen and rule.task not in {TaskType.LENGTH, TaskType.AREA}:
             raise TemplateError(prefix + "duplicate constraint")
         seen.add(signature)
         if rule.task in {TaskType.LENGTH, TaskType.AREA}:
-            if len(set(dimensions)) != 1:
-                raise TemplateError(prefix + "pixel measurement rules require equal image dimensions")
-            width, height = dimensions[0]
-            maximum = hypot(width - 1, height - 1) + 1 if rule.task is TaskType.LENGTH else width * height
-            if (rule.minimum is None or rule.maximum is None
-                    or not isfinite(rule.minimum) or not isfinite(rule.maximum)
-                    or rule.maximum > maximum or rule.maximum <= 0):
-                raise TemplateError(prefix + "measurement bounds exceed native image dimensions or are non-finite")
+            if rule.minimum != "unknown" or rule.maximum != "unknown":
+                raise TemplateError(prefix + f"{rule.task.value} requires VALUE=[unknown,unknown] until calibration")
+            if rule.count is None:
+                raise TemplateError(prefix + "deferred measurement requires COUNT=[number] or COUNT=[unknown]")
         if rule.count is not None and rule.subject in counted_subjects:
-            if max(rule.count) > max(counted_subjects[rule.subject]):
+            totals = counted_subjects[rule.subject]
+            if "unknown" not in rule.count and "unknown" not in totals and max(rule.count) > max(totals):
                 raise TemplateError(prefix + "matching COUNT exceeds the subject's total count")
         if rule.task is TaskType.SPATIAL_COMBINATION:
-            if rule.expected not in spec["relations"]:
+            if rule.expected != "unknown" and rule.expected not in spec["relations"]:
                 raise TemplateError(prefix + "spatial relation is not permitted by UTS")
             self_relation = str(rule.expected).startswith("self_")
-            if self_relation != (rule.property == "spatial.self_symmetry"):
+            if rule.expected != "unknown" and self_relation != (rule.property == "spatial.self_symmetry"):
                 raise TemplateError(prefix + "self-symmetry relation/property disagree")
-            if self_relation and rule.object is not None:
+            if rule.property == "spatial.self_symmetry" and rule.object is not None:
                 raise TemplateError(prefix + "self-symmetry must not have OBJECT")
-            if not self_relation and rule.subject == rule.object:
+            if rule.property != "spatial.self_symmetry" and rule.subject == rule.object:
                 raise TemplateError(prefix + "spatial subject and object must differ")
             if rule.count is None:
                 raise TemplateError(prefix + "generated spatial rules require COUNT")
@@ -149,11 +146,13 @@ def validate_generated_rules(
                 raise TemplateError(prefix + "use allowed tuple VALUE list, without VALUE_n")
             for combination in rule.expected:
                 for target, label in zip(rule.attributes, combination.split(":")):
+                    if label == "unknown":
+                        continue
                     if target.property == "attribute.count":
                         if not label.isascii() or not label.isdigit():
                             raise TemplateError(prefix + "attribute.count labels must be nonnegative integer strings")
                         totals = counted_subjects.get(target.subject)
-                        if totals is not None and int(label) not in totals:
+                        if totals is not None and "unknown" not in totals and int(label) not in totals:
                             raise TemplateError(prefix + "attribute.count conflicts with the subject's COUNT rule")
                     if target.property == "attribute.color":
                         try:

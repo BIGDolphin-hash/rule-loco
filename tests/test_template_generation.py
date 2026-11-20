@@ -3,16 +3,21 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from io import BytesIO, StringIO
+import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
 from PIL import Image
+import numpy as np
 
 from pro_innovation.errors import TemplateError
+from pro_innovation.models import MaskInstance
+from pro_innovation.sam3_thresholds.inputs import prepare_calibration_inputs
 from pro_innovation.vlm import VLMError, VisionImage, VisionMessage, VisionRequest
 from pro_innovation.template_generation import (
     GeneratedTemplates, QwenClient, TemplateGenerationError, TemplateGenerator,
@@ -28,8 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 UTS_PATH = ROOT / "config" / "template_generation" / "uts.v1.json"
 NRT = "\n".join([
     "[C001] TASK=COUNT | SUBJECT=part | PROPERTY=count | OP=EQ | VALUE=[2]",
-    "[C002] TASK=LENGTH | SUBJECT=part | PROPERTY=length | OP=RANGE | VALUE=[8,14] | COUNT=[1]",
-    "[C003] TASK=AREA | SUBJECT=part | PROPERTY=area | OP=RANGE | VALUE=[30,90] | COUNT=[2]",
+    "[C002] TASK=LENGTH | SUBJECT=part | PROPERTY=length | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[1]",
+    "[C003] TASK=AREA | SUBJECT=part | PROPERTY=area | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[2]",
     "[C004] TASK=SPATIAL_COMBINATION | SUBJECT=part | PROPERTY=spatial.position | OBJECT=container | OP=EQ | VALUE=inside | COUNT=[2]",
     '[C005] TASK=ATTRIBUTE_COMBINATION | SUBJECT_1=part | PROPERTY_1=attribute.color | SUBJECT_2=container | PROPERTY_2=attribute.shape | OP=EQ | VALUE=["red:square"]',
 ])
@@ -50,7 +55,7 @@ def tearDownModule() -> None:
 
 def pair(nrt: str = NRT) -> dict[str, str]:
     return {
-        "cqt": serialize_template(to_generic_template(parse_template(nrt))),
+        "cqt": serialize_template(to_generic_template(parse_template(nrt, allow_unknown_values=True))),
         "nrt": nrt,
     }
 
@@ -96,7 +101,8 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(set(result.as_dict()), {"cqt", "nrt"})
         self.assertEqual(result.nrt, NRT)
         validate_template_alignment(
-            parse_template(result.cqt, allow_missing_values=True), parse_template(result.nrt)
+            parse_template(result.cqt, allow_missing_values=True),
+            parse_template(result.nrt, allow_unknown_values=True),
         )
         request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
@@ -174,14 +180,70 @@ class GenerationTests(unittest.TestCase):
         count_only["tasks"] = count_only["tasks"][:1]
         self.assertEqual(self.generate(pair(NRT.splitlines()[0]), count_only).nrt, NRT.splitlines()[0])
 
-    def test_measurements_cannot_exceed_native_dimensions_or_match_impossible_counts(self) -> None:
-        for old, new in (("[8,14]", "[8,1000]"), ("[30,90]", "[30,4000]"), ("COUNT=[1]", "COUNT=[3]")):
+    def test_measurements_remain_unknown_and_counts_still_require_consistency(self) -> None:
+        for old, new in (("[unknown,unknown]", "[30,90]"), ("COUNT=[1]", "COUNT=[3]")):
             with self.subTest(new=new), self.assertRaises(TemplateGenerationError):
                 self.generate(pair(NRT.replace(old, new)))
         with Image.new("RGB", (32, 48)) as other:
-            answers = [json.dumps(pair())] * 3
-            with self.assertRaisesRegex(TemplateGenerationError, "equal image dimensions"):
-                TemplateGenerator(ScriptedClient(*answers)).generate([self.image, other], UTS_PATH)
+            result = TemplateGenerator(ScriptedClient(json.dumps(pair()))).generate([self.image, other], UTS_PATH)
+            self.assertEqual(result.nrt, NRT)
+
+    def test_filled_length_is_repaired_to_deferred_range(self) -> None:
+        filled = NRT.replace(
+            "PROPERTY=length | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[1]",
+            "PROPERTY=length | OP=RANGE | VALUE=[8,14] | COUNT=[1]",
+        )
+        client = ScriptedClient(json.dumps(pair(filled)), json.dumps(pair()))
+        result = TemplateGenerator(client).generate(self.image, UTS_PATH)
+        self.assertEqual(len(client.requests), 2)
+        self.assertIn("LENGTH requires VALUE=[unknown,unknown]", client.requests[1].messages[-1].content[0])
+        length = parse_template(result.nrt, allow_unknown_values=True)[1]
+        self.assertEqual(length.minimum, "unknown")
+        self.assertEqual(length.maximum, "unknown")
+        self.assertEqual(length.count, (1,))
+        self.assertIn("VALUE=[unknown,unknown]", result.nrt.splitlines()[1])
+        with self.assertRaises(TemplateGenerationError):
+            self.generate(pair(filled))
+
+    def test_deferred_length_does_not_require_matching_image_dimensions(self) -> None:
+        nrt = "\n".join(NRT.splitlines()[:2])
+        with Image.new("RGB", (32, 48)) as other:
+            client = ScriptedClient(json.dumps(pair(nrt)))
+            result = TemplateGenerator(client).generate([self.image, other], UTS_PATH)
+        self.assertEqual(result.nrt, nrt)
+
+    def test_distinct_length_ranks_can_share_the_same_pending_count(self) -> None:
+        lines = NRT.splitlines()[:2]
+        nrt = "\n".join([*lines, lines[1].replace("C002", "C003")])
+        self.assertEqual(self.generate(pair(nrt)).nrt, nrt)
+
+    def test_deferred_length_does_not_allow_other_missing_normal_values(self) -> None:
+        for old, new in (
+            ("PROPERTY=length | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[1]", "PROPERTY=length | OP=RANGE"),
+            ("PROPERTY=count | OP=EQ | VALUE=[2]", "PROPERTY=count | OP=EQ"),
+            ("PROPERTY=area | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[2]", "PROPERTY=area | OP=RANGE | COUNT=[2]"),
+        ):
+            output = pair()
+            output["nrt"] = NRT.replace(old, new)
+            with self.subTest(old=old), self.assertRaises(TemplateGenerationError):
+                self.generate(output)
+
+    def test_area_rejects_numeric_bounds_and_keeps_unknown_placeholders(self) -> None:
+        for bounds in ("[10,20]", "[10,unknown]", "[unknown,20]"):
+            nrt = NRT.replace("PROPERTY=area | OP=RANGE | VALUE=[unknown,unknown]",
+                              "PROPERTY=area | OP=RANGE | VALUE=" + bounds)
+            with self.subTest(bounds=bounds), self.assertRaises(TemplateGenerationError):
+                self.generate(pair(nrt))
+
+    def test_uncertain_data_keeps_count_relation_and_attribute_formats(self) -> None:
+        nrt = NRT.replace("PROPERTY=count | OP=EQ | VALUE=[2]", "PROPERTY=count | OP=EQ | VALUE=[unknown]")
+        nrt = nrt.replace("COUNT=[1]", "COUNT=[unknown]").replace("COUNT=[2]", "COUNT=[unknown]")
+        nrt = nrt.replace("VALUE=inside", "VALUE=unknown").replace("red:square", "unknown:unknown")
+        result = self.generate(pair(nrt))
+        self.assertEqual(result.nrt, nrt)
+        self.assertNotIn("unknown", result.cqt)
+        with self.assertRaises(TemplateError):
+            parse_template(result.nrt)
 
     def test_validates_spatial_subject_count_and_self_symmetry(self) -> None:
         for nrt in (
@@ -234,6 +296,63 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue()), pair())
         self.assertEqual(stderr.getvalue(), "")
         generate.assert_called_once_with(["normal.png"], UTS_PATH)
+
+
+class DeferredLengthCalibrationTests(unittest.TestCase):
+    def test_pending_lengths_support_threshold_inputs_and_later_mask_calibration(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "fill_measurement_templates", ROOT / "scripts" / "fill_measurement_templates.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            templates = root / "templates"
+            templates.mkdir()
+            path = templates / "demo.standard.rules"
+            pending = (
+                "[C001] TASK=LENGTH | SUBJECT=part | PROPERTY=length | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[2]\n"
+                "[C002] TASK=AREA | SUBJECT=part | PROPERTY=area | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[unknown]\n"
+            )
+            path.write_text(pending)
+            train = root / "dataset" / "demo" / "train" / "good"
+            train.mkdir(parents=True)
+            images = [train / "000.png", train / "001.png"]
+            for image_path in images:
+                with Image.new("RGB", (16, 16)) as image:
+                    image.save(image_path)
+            inputs = prepare_calibration_inputs(standard_path=path, normal_images=images)
+            self.assertEqual(len(inputs.truth_rules_by_image), 2)
+            self.assertEqual(inputs.truth_rules_by_image[0][0].minimum, "unknown")
+            self.assertEqual(inputs.truth_rules_by_image[0][0].count, (2,))
+            masks = []
+            for start in (2, 9):
+                mask = np.zeros((16, 16), dtype=bool)
+                mask[start:start + 2, start:start + 4] = True
+                masks.append(MaskInstance(mask))
+            segmenter = Mock()
+            segmenter.segment.return_value = {"part": tuple(masks)}
+            segmenter.cache_hits = segmenter.cache_misses = segmenter.cache_writes = 0
+            args = SimpleNamespace(
+                template_root=templates, threshold_root=root / "thresholds",
+                dataset_root=root / "dataset", sam3_repo="unused", sam3_checkpoint="unused",
+                device="cpu", sam3_threshold=0.4, cache_root=root / "cache", cache_mode="off",
+                mask_dedup_iou=0.8, mask_dedup_containment=0.85,
+                grouping_tolerance=0.1, allow_incomplete=False,
+            )
+            run = root / "run"
+            run.mkdir()
+            with patch.object(module, "Sam3Segmenter", return_value=segmenter):
+                with patch.object(module, "load_sam3_threshold_policy", return_value=SimpleNamespace(
+                    selected_thresholds={"part": 0.5},
+                )):
+                    with redirect_stdout(StringIO()):
+                        report = module.fill_class(args, "demo", run)
+            self.assertTrue(report["template_updated"])
+            calibrated = parse_template(path.read_text())
+            self.assertEqual((calibrated[0].minimum, calibrated[0].maximum, calibrated[0].count), (4, 4, (2,)))
+            self.assertEqual((calibrated[1].minimum, calibrated[1].maximum, calibrated[1].count), (8, 8, (2,)))
+            self.assertEqual((run / path.name).read_text(), pending)
 
 
 class UTSAndTransportTests(unittest.TestCase):

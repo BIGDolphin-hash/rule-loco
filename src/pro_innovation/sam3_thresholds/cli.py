@@ -14,6 +14,7 @@ from .config import (
     DEFAULT_SAM3_THRESHOLD_POLICY_BASE_ROOT,
     DEFAULT_SAM3_THRESHOLD_RESULT_ROOT,
     Sam3CalibrationConfig,
+    calibration_threshold_schedule,
 )
 from .generator import generate_sam3_thresholds
 from .inputs import prepare_calibration_inputs
@@ -29,6 +30,14 @@ def probability_argument(value: str) -> float:
     if not 0.0 <= parsed <= 1.0:
         raise argparse.ArgumentTypeError("must be in [0, 1]")
     return parsed
+
+
+def calibration_start_argument(value: str) -> float:
+    threshold = probability_argument(value)
+    try:
+        return calibration_threshold_schedule(threshold)[0]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _progress_reporter(module: str):
@@ -56,14 +65,17 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     truth_source.add_argument(
         "--truth-templates",
         nargs="+",
-        help="optional sample-specific concrete templates, one per normal image",
+        help=(
+            "image-specific templates with single-valued counts; one per normal "
+            "image, in the same order as --normal-images or the sorted --normal-dir"
+        ),
     )
     truth_source.add_argument(
         "--truth-counts",
         nargs="+",
         type=int,
         help=(
-            "per-image COUNT truths; expands a variable COUNT rule in memory "
+            "exact per-image COUNT truths; resolves a count set in memory "
             "without requiring sample-specific template files"
         ),
     )
@@ -98,9 +110,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--sam3-threshold",
-        type=probability_argument,
+        type=calibration_start_argument,
         default=CALIBRATION_PROPOSAL_THRESHOLD,
-        help="candidate-generation threshold for calibration in [0, 1] (default: 0.20)",
+        help=(
+            "starting calibration cutoff, default 0.80; failed categories retry "
+            "in 0.10 steps down to 0.40; allowed starts: 0.80/0.70/0.60/0.50/0.40"
+        ),
     )
     parser.add_argument(
         "--threshold-selection-method",

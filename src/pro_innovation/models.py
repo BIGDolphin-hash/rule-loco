@@ -6,12 +6,13 @@ from builtins import property as builtin_property
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from math import isfinite
-from typing import Any, Mapping, TypeAlias
+from typing import Any, Literal, Mapping, TypeAlias
 
 import numpy as np
 
 Scalar: TypeAlias = str | int | float | bool | None
-CountValues: TypeAlias = tuple[int, ...]
+UnknownValue: TypeAlias = Literal["unknown"]
+CountValues: TypeAlias = tuple[int | UnknownValue, ...]
 RuleValue: TypeAlias = Scalar | tuple[str, ...] | CountValues
 
 
@@ -40,8 +41,8 @@ class Rule:
     object: str | None = None
     op: str = "EQ"
     expected: RuleValue = None
-    minimum: float | None = None
-    maximum: float | None = None
+    minimum: float | UnknownValue | None = None
+    maximum: float | UnknownValue | None = None
     count: CountValues | None = None
     attributes: tuple[AttributeTarget, ...] = ()
 

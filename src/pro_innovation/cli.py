@@ -49,7 +49,6 @@ from .pipeline import (
     RULE_MEMORY_SCHEDULES,
 )
 from .sam3_thresholds import (
-    CALIBRATION_PROPOSAL_THRESHOLD,
     build_sam3_threshold_configuration,
     load_sam3_threshold_policy,
     resolve_normal_images,
@@ -60,6 +59,7 @@ from .sam3_thresholds.cli import (
     run as _command_calibrate_sam3,
 )
 from .sam3_thresholds.config import (
+    DEFAULT_SAM3_CACHE_PROPOSAL_THRESHOLD,
     DEFAULT_SAM3_THRESHOLD_POLICY_ROOT,
 )
 from .template_store import TemplateRepository
@@ -839,7 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
     cache_sam3.add_argument(
         "--sam3-threshold",
         type=_probability_argument,
-        default=CALIBRATION_PROPOSAL_THRESHOLD,
+        default=DEFAULT_SAM3_CACHE_PROPOSAL_THRESHOLD,
         help="proposal-generation threshold; 0.20 caches candidates reusable by the current stricter object thresholds",
     )
     cache_sam3.add_argument("--sam3-prompt", default="{category}")

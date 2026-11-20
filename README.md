@@ -270,7 +270,7 @@ PYTHONPATH=src python -m pro_innovation make-generic \
 
 #### 从图片和 UTS 自动生成 CQT / NRT
 
-独立模块 `pro_innovation.template_generation` 实现：**正常参考图片 + UTS → 配置的视觉语言模型 → CQT、NRT**。生成接口只有 `images`、`uts` 两个任务输入；返回对象只有 `cqt`、`nrt` 两个字段。CQT 使用现有 `generic.rules` 格式，NRT 使用 `standard.rules` 格式，可直接交给现有解析器和规则推理入口。
+独立模块 `pro_innovation.template_generation` 实现：**正常参考图片 + UTS → 配置的视觉语言模型 → CQT、NRT**。生成接口只有 `images`、`uts` 两个任务输入；返回对象只有 `cqt`、`nrt` 两个字段。CQT 使用现有 `generic.rules` 格式；NRT 是供人工检查的标准模板候选，长度和面积区间保留格式并用 `unknown` 占位，留待后续填充。
 
 `config/template_generation/uts.v1.json` 提供与当前执行器匹配的通用任务定义。UTS 是 JSON 对象，包含整数 `version: 1` 和非空 `tasks` 列表；每项定义 `task`、`properties`、`operators`，长度/面积任务另外定义 `unit`，空间任务另外定义 `relations`。可以删除不需要的任务或缩小允许的属性、关系和操作符集合；生成结果会检查这些限制。
 
@@ -356,7 +356,20 @@ templates = generator.generate(images=["/path/to/normal.png"], uts=Path("config/
 
 `images` 支持单个本地路径、PIL 图片或它们的序列；`uts` 支持 JSON 字典、JSON 文本或 `Path` 文件。参考图片应属于同一产品类别，并覆盖希望纳入 NRT 的正常配置。图片按原始像素尺寸编码为 PNG，不自动缩图或应用 EXIF 旋转。图片限制属于具体适配器：千问检查图片数量、16M 像素和 20 MiB 编码限制；OpenAI Chat Completions 和 Anthropic 适配器分别使用 8 MiB、5 MiB 的单图预算。请求体默认预算为千问 DashScope 域名 16 MiB、千问工作空间域名 64 MiB、Gemini 内联请求 20 MiB、其他接口 32 MiB；可以通过 `VLM_MAX_REQUEST_BYTES` 调整本地预算，实际服务限制仍需满足。
 
-固定提示词位于 `src/pro_innovation/template_generation/prompts.py`，指导模型选择有视觉依据的任务、统一对象命名、保留实际观察到的属性配对，并区分对象总数与满足度量/空间条件的实例数。不根据未出现的配置扩展正常集合，不强制输出全部五类任务；无法可靠确定像素区间时省略对应度量规则。模型生成的长度/面积区间属于候选估计，不能视为已通过正常样本标定的测量结果。
+固定提示词位于 `src/pro_innovation/template_generation/prompts.py`，指导模型选择有视觉依据的任务、统一对象命名、保留实际观察到的属性配对，并区分对象总数与满足度量/空间条件的实例数。不根据未出现的配置扩展正常集合，不强制输出全部五类任务。
+
+**长度和面积区间不由视觉语言模型估计。** NRT 的 `LENGTH`、`AREA` 规则保留 `VALUE` 的区间格式，统一填写 `VALUE=[unknown,unknown]`。数量已知时保留数量，不确定时使用 `COUNT=[unknown]`；CQT 继续保留查询结构。例如：
+
+```text
+[C001] TASK=LENGTH | SUBJECT=part | PROPERTY=length | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[1]
+[C002] TASK=AREA | SUBJECT=region | PROPERTY=area | OP=RANGE | VALUE=[unknown,unknown] | COUNT=[unknown]
+```
+
+其他不确定数据也保留字段与类型格式：总数用 `VALUE=[unknown]`，空间关系用 `VALUE=unknown`，属性组合保留元组位置，例如 `VALUE=["cherry:unknown"]`。`unknown` 表示待核实数据，不是一种正常属性。候选 NRT 使用 `parse_template(text, allow_unknown_values=True)` 读取；默认严格解析仍用于数据已填写完成的推理模板。
+
+同一对象存在多个尺寸组时，规则按从大到小排列，供后续标定按组回填。`scripts/fill_measurement_templates.py` 会从实际 Mask 测量填充长度、面积区间，并回填未知的组内数量；最终执行严格校验。SAM3 阈值标定可以读取含未知区间的模板，但用于标定的数量真值需要人工确认或显式提供。
+
+回填时，用 `--template-root` 指向包含 `<class-name>.standard.rules` 的目录，用 `--threshold-root` 指向保存 `<class-name>.json` 阈值策略的目录，用 `--dataset-root` 指向包含 `<class-name>/train/good` 的数据集根目录。脚本原地更新标准模板，并将原模板与测量报告写入 `--output-root` 下的运行目录。其余未知值需人工填写后再用于推理。
 
 默认通过 JSON Schema 限制两个输出字段，再复用现有模板解析器检查完整性、CQT 空值、两份模板对齐，以及 UTS、空间关系、属性标签和明显的数量/尺寸矛盾。无效模板最多进行三轮生成/修正，仍不合法则报错，不返回部分模板。共享 HTTP 层在限流或部分暂时性服务端错误时最多尝试三次；认证错误和连接超时直接报错，拒绝或截断的响应不会当作完整模板返回。校验不代表视觉内容已被证实，生成的正常约束仍需要结合参考图片确认。
 
@@ -425,7 +438,8 @@ PYTHONPATH=src python -m pro_innovation calibrate-sam3-thresholds \
   --standard templates/store/screw_bag.standard.rules \
   --sam3-repo /path/to/SAM3 \
   --sam3-checkpoint /path/to/sam3.pt \
-  --output /path/to/screw_bag.thresholds.json \
+  --output /path/to/thresholds/screw_bag.json \
+  --calibration-result-root /path/to/calibration_reports \
   --device cuda
 ```
 
@@ -433,13 +447,34 @@ PYTHONPATH=src python -m pro_innovation calibrate-sam3-thresholds \
 
 当前 `confidence_gap_midpoint` 的生成步骤如下，该过程不更新 SAM3 参数：
 
-1. 读取正常图像和数量真值。优先使用显式 `COUNT`，缺失时从 `LENGTH`/`AREA` 的 `COUNT` 取值；允许数量集合默认取最大值。至少需要两张可解码的正常图像。
-2. 每张图像按类别生成一次 SAM3 候选，候选阈值 `--sam3-threshold` 默认 `0.20`，随后进行同类别 Mask 去重。
+1. 读取正常图像和逐图数量真值。优先使用显式 `COUNT`，缺失时从 `LENGTH`/`AREA` 的 `COUNT` 取值。每张照片用于标定的对象数量必须为单一明确整数；`VALUE=[4,6,10]` 等数量集合不会自动取最大值，必须先指定该照片实际对应的数量。至少需要两张可解码的正常图像。
+2. 候选阈值从 `0.80` 开始。每轮对仍未标定成功的对象类别，在全部标定照片上生成 SAM3 候选并进行同类别 Mask 去重；模型内部的候选过滤阈值也同步切换到当前档位。
 3. 对图像中数量真值为 `N` 的类别，将置信度降序排列：第 `N` 个为保留边界，第 `N+1` 个为多余实例边界；没有多余实例时用候选阈值作为其上界。
-4. 汇总得到 `L = Q95(多余实例边界)`、`U = Q05(保留边界)`。若 `L < U`，取 `(L + U) / 2`，再按 `0.10` 向下取整；数量为零、候选不足或边界重叠的类别记录标定失败。
-5. 保存精简运行策略和完整报告。策略只包含 `selected_thresholds`、`calibration_images` 和 `initial_threshold`；报告保留边界、候选分数、失败原因及最终阈值下的实例数量。失败类别不写入阈值映射，运行时继续使用全局阈值回退。向下取整沿用原算法，可能越过置信度边界，可通过报告中的 `count_at_selected_threshold` 复核。
+4. 汇总得到 `L = Q95(多余实例边界)`、`U = Q05(保留边界)`。若 `L < U`，取 `(L + U) / 2`，再按 `0.10` 向下取整。该类别得到阈值后停止重试，保留首次成功结果。
+5. 本轮未能标定出有效阈值的类别，包括数量为零、候选不足或边界重叠，按 `0.80 → 0.70 → 0.60 → 0.50 → 0.40` 降低候选阈值并重新执行分割、去重和标定。失败判定使用标定结果 `status=failed`，不局限于分割数量不足。`0.40` 也必须尝试；仍失败则保留失败状态，不再降低阈值。输入真值错误、模型加载或推理异常会直接报错退出。
+6. 保存精简运行策略和完整报告。策略只包含 `selected_thresholds`、`calibration_images` 和 `initial_threshold`，其中 `initial_threshold` 记录起始候选阈值，默认 `0.80`。报告通过 `image_truths` 记录照片、真值模板及实际数量，通过每类的 `attempts` 记录各次候选阈值、标定状态、失败原因、置信度边界和样本分数；每类的 `proposal_threshold` 记录成功档位或最终失败档位。最终失败类别不写入阈值映射，运行时继续使用全局阈值回退。向下取整沿用原算法，可能越过置信度边界，可通过报告中的 `count_at_selected_threshold` 复核。
 
-数量随图像变化时，可使用 `--truth-counts 2 3 2 --truth-subject screw`，或重复传入 `--truth-subject-counts screw 2 3 2` 为多个对象提供数量；也可以用 `--truth-templates` 提供逐图真值模板。这三种输入方式互斥，数量或模板顺序均与原始图像顺序一致，坏图跳过后仍保持对应关系。已有策略需显式传入 `--overwrite` 才会替换。完整报告默认保存在 `<calibration-result-root>/<策略父目录名>/<class-name>.json`，全部类别成功时退出码为 `0`，部分或全部失败时为 `2`。
+标定命令的 `--sam3-threshold` 现在表示起始候选阈值，默认 `0.80`；可指定 `0.80/0.70/0.60/0.50/0.40` 中的其他档位，重试下限固定为 `0.40`。例如 `--sam3-threshold 0.60` 会依次尝试 `0.60、0.50、0.40`。`cache-sam3` 命令独立保留 `0.20` 的默认候选阈值，低阈值缓存可服务多档标定；高阈值生成的缓存不能代替更低阈值的候选。
+
+数量随图像变化时，使用 `--truth-templates` 为每张照片指定对应的非数量集合模板。例如，第一张照片的模板写 `VALUE=[4]`，第二张照片的模板写 `VALUE=[6]`，并按照片顺序配对：
+
+```bash
+PYTHONPATH=src python -m pro_innovation.sam3_thresholds \
+  --class-name demo \
+  --standard /path/to/demo.standard.rules \
+  --normal-images /path/to/photo_a.png /path/to/photo_b.png \
+  --truth-templates /path/to/photo_a.rules /path/to/photo_b.rules \
+  --sam3-repo /path/to/SAM3 \
+  --sam3-checkpoint /path/to/sam3.pt \
+  --output /path/to/thresholds/demo.json \
+  --calibration-result-root /path/to/calibration_reports
+```
+
+也可以使用 `--truth-counts 4 6 --truth-subject screw`，或重复传入 `--truth-subject-counts screw 4 6` 为多个对象提供逐图数量。代码在内存中将数量集合展开为逐图单值规则。只覆盖一个对象后仍有其他对象的数量集合未解析时会报错；对象总数的覆盖不会改写同对象已有的尺寸分组数量。这三种真值输入方式互斥。
+
+每张照片的真值模板必须包含标准模板中参与标定的全部对象，且不能额外引入对象。数量集合或实际用于标定的 `unknown` 数量会在 SAM3 分割前报错，错误信息指出对应照片、模板及对象。未传逐图真值时，仅允许复用数量均已明确的标准模板。
+
+数量或模板顺序必须与 `--normal-images` 的显式照片顺序一致；使用 `--normal-dir` 时则按文件名排序。坏图跳过时同步跳过对应真值，保留其余配对关系。已有策略需显式传入 `--overwrite` 才会替换。完整报告默认保存在 `<calibration-result-root>/<策略父目录名>/<class-name>.json`，全部类别成功时退出码为 `0`，部分或全部失败时为 `2`。
 
 阈值模块的职责划分如下：
 
@@ -464,18 +499,19 @@ from pro_innovation.sam3_thresholds import (
 
 inputs = prepare_calibration_inputs(
     standard_path="templates/store/screw_bag.standard.rules",
-    normal_dir="/path/to/screw_bag/train/good",
+    normal_images=["/path/to/photo_a.png", "/path/to/photo_b.png"],
+    truth_templates=["/path/to/photo_a.rules", "/path/to/photo_b.rules"],
 )
 result = generate_sam3_thresholds(
     class_name="screw_bag",
     inputs=inputs,
-    config=Sam3CalibrationConfig(proposal_threshold=0.20),
+    config=Sam3CalibrationConfig(proposal_threshold=0.80),
     output="/path/to/screw_bag.thresholds.json",
     result_root="/path/to/calibration_reports",
 )
 ```
 
-已有分割器或自定义后处理时，可以直接调用 `calibrate_sam3_thresholds(...)` 获取完整标定结果，也可以向 `generate_sam3_thresholds(...)` 注入 `segmenter` 和 `mask_processor`。旧的 `pro_innovation.sam3_calibration` 导入路径继续可用。
+已有分割器或自定义后处理时，可以直接调用 `calibrate_sam3_thresholds(...)` 获取完整标定结果，也可以向 `generate_sam3_thresholds(...)` 注入 `segmenter` 和 `mask_processor`。带有内部置信度过滤的分割器需实现 `ThresholdSegmenter.segment_at_threshold(...)`，以便每轮实际切换候选阈值；仅提供 `segment(...)` 的分割器需返回覆盖最低 `0.40` 档位的原始候选，标定模块会逐档过滤。内置 `Sam3Segmenter` 已实现该接口，重试复用已加载模型，结束后恢复原推理阈值。旧的 `pro_innovation.sam3_calibration` 导入路径继续可用。
 
 `config/sam3_thresholds/confidence_gap_midpoint_4-shot/` 同时提供原实验五个类别的阈值策略。文件中的 `calibration_images` 仅记录原标定图像路径，不包含图像；切换数据集、权重或对象定义后应重新标定。以下建库和完整评测使用的阈值策略必须一致。
 

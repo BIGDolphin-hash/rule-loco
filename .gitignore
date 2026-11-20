@@ -11,7 +11,11 @@
 !/src/**/*.py
 
 !/tests/
+!/tests/test_sam3_adaptive_calibration.py
+!/tests/test_sam3_calibration.py
+!/tests/test_sam3_threshold_generation.py
 !/tests/test_template_generation.py
+!/tests/test_templates.py
 !/tests/test_vlm.py
 
 !/scripts/

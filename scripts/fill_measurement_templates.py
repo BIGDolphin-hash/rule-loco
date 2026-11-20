@@ -54,7 +54,10 @@ def fill_class(args: argparse.Namespace, class_name: str, run_dir: Path) -> dict
     template_path = args.template_root / f"{class_name}.standard.rules"
     threshold_path = args.threshold_root / f"{class_name}.json"
     train_dir = args.dataset_root / class_name / "train" / "good"
-    rules = parse_template(template_path.read_text(encoding="utf-8"))
+    rules = parse_template(
+        template_path.read_text(encoding="utf-8"), allow_deferred_lengths=True,
+        allow_unknown_values=True,
+    )
     targets = _measurement_rules(rules)
     if not targets:
         raise ValueError(f"{class_name} has no LENGTH/AREA rules")
@@ -84,6 +87,7 @@ def fill_class(args: argparse.Namespace, class_name: str, run_dir: Path) -> dict
     )
     images = _images(train_dir)
     values: dict[str, list[float]] = {rule.rule_id: [] for rule in targets}
+    counts: dict[str, set[int]] = {rule.rule_id: set() for rule in targets}
     failures: list[dict[str, Any]] = []
 
     grouped_rules: dict[tuple[TaskType, str], list[Rule]] = {}
@@ -108,12 +112,13 @@ def fill_class(args: argparse.Namespace, class_name: str, run_dir: Path) -> dict
                 for rank, rule in enumerate(subject_rules, start=1):
                     group = groups[rank - 1]
                     expected_count = tuple(rule.count or ())
-                    if expected_count and group.count not in expected_count:
+                    if expected_count and "unknown" not in expected_count and group.count not in expected_count:
                         raise ValueError(
                             f"{rule.rule_id}: rank {rank} count {group.count} not in "
                             f"{list(expected_count)}"
                         )
                     values[rule.rule_id].append(float(group.representative))
+                    counts[rule.rule_id].add(group.count)
         except Exception as exc:
             failures.append({"image": str(image_path), "error": str(exc)})
         if index == 1 or index % 25 == 0 or index == len(images):
@@ -151,6 +156,7 @@ def fill_class(args: argparse.Namespace, class_name: str, run_dir: Path) -> dict
             "measurement_count": len(measured),
             "minimum": replacements.get(rule.rule_id, (None, None))[0],
             "maximum": replacements.get(rule.rule_id, (None, None))[1],
+            "observed_counts": sorted(counts[rule.rule_id]),
         }
 
     class_report_path = run_dir / f"{class_name}.json"
@@ -162,7 +168,13 @@ def fill_class(args: argparse.Namespace, class_name: str, run_dir: Path) -> dict
         return report
 
     updated = tuple(
-        replace(rule, minimum=float(replacements[rule.rule_id][0]), maximum=float(replacements[rule.rule_id][1]))
+        replace(
+            rule, minimum=float(replacements[rule.rule_id][0]),
+            maximum=float(replacements[rule.rule_id][1]),
+            count=tuple(sorted(counts[rule.rule_id] | {
+                value for value in (rule.count or ()) if isinstance(value, int)
+            })) if "unknown" in (rule.count or ()) else rule.count,
+        )
         if rule.rule_id in replacements
         else rule
         for rule in rules

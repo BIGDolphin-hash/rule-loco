@@ -91,30 +91,29 @@ class AttributePrediction:
 class RuleResult:
     rule_id: str
     task: TaskType
-    satisfied: bool | None
+    satisfied: bool
     actual: Any
     expected: Any
-    satisfaction_score: float | None
-    violation_score: float | None
+    satisfaction_score: float
+    violation_score: float
     evidence_valid: bool = True
     details: Mapping[str, Any] = field(default_factory=dict)
     error: str | None = None
 
     def __post_init__(self) -> None:
         scores = (self.satisfaction_score, self.violation_score)
-        if self.evidence_valid:
-            if self.satisfied is None or any(score is None for score in scores):
-                raise ValueError(
-                    "valid rule evidence requires a decision and two scores"
-                )
-        elif self.satisfied is not None or any(score is not None for score in scores):
-            raise ValueError("invalid rule evidence must use UNKNOWN and null scores")
+        if not isinstance(self.satisfied, bool):
+            raise ValueError("rule results require a pass/fail decision")
+        if not self.evidence_valid and (self.satisfied or scores != (0.0, 1.0)):
+            raise ValueError("invalid rule evidence requires FAIL with violation score 1")
         for score in scores:
-            if score is not None and (
-                not isfinite(float(score)) or not 0.0 <= float(score) <= 1.0
+            if (
+                score is None
+                or not isfinite(float(score))
+                or not 0.0 <= float(score) <= 1.0
             ):
                 raise ValueError(f"rule score must be in [0, 1], got {score!r}")
-        if all(score is not None for score in scores) and not np.isclose(
+        if not np.isclose(
             float(self.satisfaction_score) + float(self.violation_score), 1.0
         ):
             raise ValueError("satisfaction_score and violation_score must sum to 1")
@@ -123,7 +122,11 @@ class RuleResult:
     def passed(self) -> bool:
         """Compatibility view for callers that previously consumed ``passed``."""
 
-        return self.satisfied is True
+        return self.satisfied
+
+    @builtin_property
+    def status(self) -> Literal["PASS", "FAIL"]:
+        return "PASS" if self.satisfied else "FAIL"
 
 
 @dataclass(frozen=True)
@@ -214,8 +217,8 @@ class CompositionEvidence:
 
 @dataclass(frozen=True)
 class InferenceReport:
-    image_anomaly: bool | None
-    image_anomaly_score: float | None
+    image_anomaly: bool
+    image_anomaly_score: float
     logical_anomaly: bool | None
     anomaly_source: str | None
     categories: tuple[str, ...]
@@ -229,8 +232,11 @@ class InferenceReport:
     timings_seconds: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.image_anomaly_score is not None and (
-            not isfinite(float(self.image_anomaly_score))
+        if not isinstance(self.image_anomaly, bool):
+            raise ValueError("inference reports require a pass/fail decision")
+        if (
+            self.image_anomaly_score is None
+            or not isfinite(float(self.image_anomaly_score))
             or float(self.image_anomaly_score) < 0.0
         ):
             raise ValueError("image anomaly score must be finite and non-negative")
@@ -255,36 +261,29 @@ class InferenceReport:
             raise ValueError("unsupported execution mode")
 
     @builtin_property
-    def is_anomaly(self) -> bool | None:
+    def is_anomaly(self) -> bool:
         return self.image_anomaly
 
     @builtin_property
-    def final_anomaly_score(self) -> float | None:
+    def final_anomaly_score(self) -> float:
         """Compatibility alias for callers predating image-level fusion."""
 
         return self.image_anomaly_score
 
     @builtin_property
-    def status(self) -> str:
-        if self.image_anomaly is None:
-            return "UNKNOWN"
-        if not self.image_anomaly:
-            return "NORMAL"
-        return {
-            "rule": "RULE_ANOMALY",
-            "composition": "COMPOSITION_ANOMALY",
-            "structural": "STRUCTURAL_ANOMALY",
-            "mixed": "MIXED_ANOMALY",
-        }.get(self.anomaly_source, "ANOMALY")
+    def status(self) -> Literal["PASS", "FAIL"]:
+        return "FAIL" if self.image_anomaly else "PASS"
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
+        result["status"] = self.status
         result.pop("image_anomaly")
         result.pop("anomaly_source")
         result.pop("logical_anomaly")
-        for item in result["results"]:
+        for item, rule in zip(result["results"], self.results):
             item["task"] = item["task"].value
             item.pop("satisfied", None)
+            item["status"] = rule.status
         if result["patch_evidence"] is not None:
             result["patch_evidence"].pop("anomaly", None)
         if result["composition_evidence"] is not None:

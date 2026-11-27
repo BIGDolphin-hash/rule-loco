@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate isolated CAST-JM on one MVTec LOCO class."""
+"""Evaluate isolated PSTM on one MVTec LOCO class."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ from pro_innovation.evaluation import (
     _split_specs_for_dataset,
     binary_auroc,
 )
-from pro_innovation.memory_modules.castjm import (
-    CASTJMGlobalPatchBank,
-    CASTJMMemoryBank,
+from pro_innovation.memory_modules.pstm import (
+    PSTMGlobalPatchBank,
+    PSTMMemoryBank,
 )
 from pro_innovation.mask_processing import MaskPostprocessor
 from pro_innovation.sam3_thresholds import load_sam3_threshold_policy
@@ -30,7 +30,7 @@ from pro_innovation.templates import collect_categories, parse_template
 
 
 def _arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate isolated CAST-JM")
+    parser = argparse.ArgumentParser(description="Evaluate isolated PSTM")
     parser.add_argument("--class-name", required=True)
     parser.add_argument("--dataset", choices=SUPPORTED_DATASETS, default=MVTEC_LOCO)
     parser.add_argument("--dataset-root", required=True)
@@ -39,7 +39,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--global-bank", required=True)
     parser.add_argument(
         "--joint-bank",
-        help="required only when a threshold policy enables joint CAST-JM scoring",
+        help="required only when a threshold policy enables joint PSTM scoring",
     )
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--device", default="cuda")
@@ -121,7 +121,7 @@ def main() -> int:
         categories: tuple[str, ...] = ()
         missing: tuple[str, ...] = ()
         print(
-            "[CAST-JM] no threshold policy; returning the Global Patch anomaly "
+            "[PSTM] no threshold policy; returning the Global Patch anomaly "
             "score directly without segmentation or joint-memory processing",
             flush=True,
         )
@@ -130,7 +130,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed CAST-JM requires template or threshold-policy categories"
+                "SAM3-backed PSTM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -139,13 +139,13 @@ def main() -> int:
         )
         if missing:
             print(
-                "[CAST-JM] warning: threshold policy is missing "
+                "[PSTM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
             )
 
-    global_bank = CASTJMGlobalPatchBank.load(
+    global_bank = PSTMGlobalPatchBank.load(
         args.global_bank,
         expected_class_name=args.class_name,
         expected_checkpoint_path=args.dino_checkpoint,
@@ -154,7 +154,7 @@ def main() -> int:
     if not whole_image_mode:
         if not args.joint_bank:
             raise ValueError("--joint-bank is required when a threshold policy is used")
-        joint_bank = CASTJMMemoryBank.load(
+        joint_bank = PSTMMemoryBank.load(
             args.joint_bank,
             expected_class_name=args.class_name,
             expected_categories=categories,
@@ -310,7 +310,7 @@ def main() -> int:
         if label == 1
     }
     summary = {
-        "module": "Global Patch" if whole_image_mode else "CAST-JM",
+        "module": "Global Patch" if whole_image_mode else "PSTM",
         "class_name": args.class_name,
         "dataset": args.dataset,
         "splits": list(splits),

@@ -537,10 +537,6 @@ def _command_infer(args: argparse.Namespace) -> int:
     )
     payload = json.dumps(report_payload, ensure_ascii=False, indent=2)
     _write_or_print(payload, args.output)
-    if report.is_anomaly is None:
-        return 2
-    if report.is_anomaly is None:
-        return 0
     return 1 if report.is_anomaly else 0
 
 
@@ -819,7 +815,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .template_generation.cli import add_arguments, run
 
     generate = subparsers.add_parser(
-        "generate-templates", help="generate CQT/NRT from normal images and UTS with the configured VLM"
+        "generate-templates", help="generate CQT/NRT from a description, normal images and UTS"
     )
     add_arguments(generate)
     generate.set_defaults(func=run)

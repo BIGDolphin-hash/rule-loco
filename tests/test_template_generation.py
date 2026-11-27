@@ -126,7 +126,10 @@ class GenerationTests(unittest.TestCase):
         bad = pair()
         bad["cqt"] = bad["cqt"].replace("SUBJECT=part", "SUBJECT=wrong", 1)
         client = ScriptedClient(json.dumps(bad), json.dumps(pair()))
-        result = TemplateGenerator(client).generate([self.image, self.image], UTS_PATH)
+        description = "正常配置有两件部件。\n尺寸区间待标定。"
+        result = TemplateGenerator(client).generate(
+            [self.image, self.image], UTS_PATH, description=description
+        )
         self.assertEqual(result.nrt, NRT)
         self.assertEqual(len(client.requests), 2)
         first, second = client.requests
@@ -135,6 +138,31 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(second.messages[1].role, "assistant")
         self.assertIn("structures differ", second.messages[2].content[0])
         self.assertEqual(sum(isinstance(item, VisionImage) for item in first.messages[0].content), 2)
+        self.assertTrue(first.messages[0].content[0].endswith(
+            json.dumps(description, ensure_ascii=False)
+        ))
+
+    def test_explicit_description_rules_survive_generation_and_repair(self) -> None:
+        count, length = NRT.splitlines()[:2]
+        description = "\n".join((
+            "保留以下规则，并按图补充其他检查。",
+            count.replace("C001", "Source1"),
+            length.replace("C002", "Source2").replace("[unknown,unknown]", "[10,20]"),
+        ))
+        bad = pair(count.replace("VALUE=[2]", "VALUE=[1]"))
+        client = ScriptedClient(json.dumps(bad), json.dumps(pair()))
+        result = TemplateGenerator(client).generate(self.image, UTS_PATH, description)
+        self.assertEqual(result.nrt, NRT)
+        self.assertIn("description rule Source1", client.requests[1].messages[-1].content[0])
+        self.assertEqual(len(client.requests), 2)
+
+    def test_invalid_explicit_description_rule_fails_before_request(self) -> None:
+        uts = load_uts(UTS_PATH)
+        uts["tasks"] = uts["tasks"][:1]
+        client = ScriptedClient()
+        with self.assertRaisesRegex(TemplateError, "invalid rule in description.*not permitted"):
+            TemplateGenerator(client).generate(self.image, uts, NRT.splitlines()[1])
+        self.assertEqual(client.requests, [])
 
     def test_invalid_pair_never_returns_partial_result_and_retries_are_bounded(self) -> None:
         client = ScriptedClient("{}", "{}", "{}")
@@ -281,21 +309,35 @@ class GenerationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "normal.png"
             self.image.save(path)
+            description_path = Path(directory) / "description.txt"
+            description = "部件总数为 2。\n检查空间关系。\n"
+            description_path.write_text(description, encoding="utf-8")
             client = ScriptedClient(json.dumps(pair()))
-            result = TemplateGenerator(client).generate(path, json.dumps(load_uts(UTS_PATH)))
+            result = TemplateGenerator(client).generate(
+                path, json.dumps(load_uts(UTS_PATH)), description=description_path
+            )
             self.assertEqual(result.as_dict(), pair())
             self.assertNotIn(str(path), repr(client.requests))
+            self.assertTrue(client.requests[0].messages[0].content[0].endswith(
+                json.dumps(description, ensure_ascii=False)
+            ))
 
     def test_cli_stdout_contains_only_cqt_and_nrt(self) -> None:
-        stdout, stderr = StringIO(), StringIO()
-        result = GeneratedTemplates(**pair())
-        with patch("pro_innovation.template_generation.cli.generate_templates", return_value=result) as generate:
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                code = main(["--images", "normal.png", "--uts", str(UTS_PATH)])
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(stdout.getvalue()), pair())
-        self.assertEqual(stderr.getvalue(), "")
-        generate.assert_called_once_with(["normal.png"], UTS_PATH)
+        for flags, expected in (
+            ([], None),
+            (["--description", "部件总数为 2。"], "部件总数为 2。"),
+            (["--description-file", "description.txt"], Path("description.txt")),
+        ):
+            with self.subTest(flags=flags):
+                stdout, stderr = StringIO(), StringIO()
+                result = GeneratedTemplates(**pair())
+                with patch("pro_innovation.template_generation.cli.generate_templates", return_value=result) as generate:
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = main(["--images", "normal.png", "--uts", str(UTS_PATH), *flags])
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(stdout.getvalue()), pair())
+                self.assertEqual(stderr.getvalue(), "")
+                generate.assert_called_once_with(["normal.png"], UTS_PATH, description=expected)
 
 
 class DeferredLengthCalibrationTests(unittest.TestCase):

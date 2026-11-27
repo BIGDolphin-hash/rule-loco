@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one isolated Category-Aligned Semantic–Texture Joint Memory bank."""
+"""Build one isolated Paired Semantic–Texture Memory bank."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from pro_innovation.adapters import (
     Sam3Segmenter,
     WholeImageSegmenter,
 )
-from pro_innovation.memory_modules.castjm import (
+from pro_innovation.memory_modules.pstm import (
     DEFAULT_TEXTURE_WEIGHT,
     DEFAULT_TOP_FRACTION,
-    CASTJMGlobalPatchBank,
-    CASTJMMemoryBank,
+    PSTMGlobalPatchBank,
+    PSTMMemoryBank,
     category_only_embedding,
     global_patch_texture_signature,
 )
@@ -29,7 +29,7 @@ from pro_innovation.templates import collect_categories, parse_template
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build isolated Category-Aligned Semantic–Texture Joint Memory"
+        description="Build isolated Paired Semantic–Texture Memory"
     )
     parser.add_argument("--class-name", required=True)
     parser.add_argument("--normal-dir", required=True)
@@ -90,7 +90,7 @@ def main() -> int:
         categories = (args.class_name,)
         missing: tuple[str, ...] = ()
         print(
-            "[CAST-JM] no threshold policy; treating the complete image as "
+            "[PSTM] no threshold policy; treating the complete image as "
             f"one {args.class_name!r} object without SAM3",
             flush=True,
         )
@@ -99,7 +99,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed CAST-JM requires template or threshold-policy categories"
+                "SAM3-backed PSTM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -108,13 +108,13 @@ def main() -> int:
         )
         if missing:
             print(
-                "[CAST-JM] warning: threshold policy is missing "
+                "[PSTM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
             )
 
-    global_bank = CASTJMGlobalPatchBank.load(
+    global_bank = PSTMGlobalPatchBank.load(
         args.global_bank,
         expected_class_name=args.class_name,
         expected_checkpoint_path=args.dino_checkpoint,
@@ -206,14 +206,14 @@ def main() -> int:
             )
         completed = min(start + len(batch), total)
         print(
-            f"[CAST-JM] {args.class_name}: {completed}/{total} "
+            f"[PSTM] {args.class_name}: {completed}/{total} "
             f"({completed / total * 100:.1f}%)",
             flush=True,
         )
 
     if feature_grid is None:
         raise RuntimeError("no joint-memory features were produced")
-    bank = CASTJMMemoryBank.build_from_components(
+    bank = PSTMMemoryBank.build_from_components(
         class_name=args.class_name,
         categories=categories,
         category_features=torch.stack(category_rows, dim=0),
@@ -229,7 +229,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "module": "CAST-JM",
+                "module": "PSTM",
                 "bank": str(output),
                 "class_name": bank.class_name,
                 "categories": list(bank.categories),

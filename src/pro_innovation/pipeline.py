@@ -1,4 +1,4 @@
-"""End-to-end V1 routing over one shared category mask pool."""
+"""VERV rule verification and RGER routing with one shared category mask pool."""
 
 from __future__ import annotations
 
@@ -356,11 +356,11 @@ class LogicAnomalyPipeline:
     ) -> tuple[
         tuple[RuleResult, ...],
         tuple[Rule, ...],
-        bool | None,
-        float | None,
-        float | None,
+        bool,
+        float,
         dict[str, Any],
     ]:
+        """Run VERV on the ordered template rules."""
         timings = _new_timings()
         spatial_rules: dict[tuple[str, str], list[tuple[Rule, Rule]]] = {}
         for generic, standard in pairs:
@@ -381,15 +381,11 @@ class LogicAnomalyPipeline:
                     spatial_rules=spatial_rules,
                 )
             except ExecutionError as exc:
-                result = RuleResult(
-                    rule_id=generic.rule_id,
-                    task=generic.task,
-                    satisfied=None,
+                result = self._binary_result(
+                    generic,
+                    satisfied=False,
                     actual=None,
                     expected=self._expected_view(standard),
-                    satisfaction_score=None,
-                    violation_score=None,
-                    evidence_valid=False,
                     error=str(exc),
                 )
                 filled = generic
@@ -398,27 +394,15 @@ class LogicAnomalyPipeline:
             timings["rule_by_id"][generic.rule_id] = task_elapsed
             results.append(result)
             filled_rules.append(filled)
-            if stop_on_failure and result.satisfied is False:
+            if stop_on_failure and not result.satisfied:
                 break
         timings["rule_total"] = perf_counter() - rule_started
-        if any((result.satisfied is False for result in results)):
-            logical_anomaly: bool | None = True
-        elif any((result.satisfied is None for result in results)):
-            logical_anomaly = None
-        else:
-            logical_anomaly = False
-        rule_score = (
-            1.0
-            if logical_anomaly is True
-            else 0.0 if logical_anomaly is False else None
-        )
-        rule_fusion_score = rule_score
+        rule_failed = any(not result.satisfied for result in results)
         return (
             tuple(results),
             tuple(filled_rules),
-            logical_anomaly,
-            rule_score,
-            rule_fusion_score,
+            rule_failed,
+            float(rule_failed),
             timings,
         )
 
@@ -510,7 +494,6 @@ class LogicAnomalyPipeline:
                     memory_future.result()
                 )
             branch_wall = perf_counter() - branch_started
-            execution_mode = "rule_binary_memory_parallel"
         else:
             rule_output = self._evaluate_rule_branch(
                 image,
@@ -522,37 +505,29 @@ class LogicAnomalyPipeline:
             composition_evidence = None
             memory_timings = _new_timings()
             branch_wall = perf_counter() - branch_started
-            execution_mode = "rule_binary_only"
 
         (
             results,
             filled_rules,
-            logical_anomaly,
+            rule_failed,
             rule_score,
-            rule_fusion_score,
             rule_timings,
         ) = rule_output
         self._merge_branch_timings(timings, rule_timings)
 
-        rule_failed = logical_anomaly is True
-        if selective and (logical_anomaly is None or rule_failed):
+        # RGER uses the VERV verdict to gate memory scoring in selective mode.
+        if selective and rule_failed:
             timings["branch_wall_total"] = branch_wall
             return InferenceReport(
-                image_anomaly=True if rule_failed else None,
-                image_anomaly_score=(
-                    rule_fusion_score
-                    if rule_failed and rule_fusion_score is not None
-                    else rule_score
-                ),
-                logical_anomaly=logical_anomaly,
-                anomaly_source="rule" if rule_failed else None,
+                image_anomaly=True,
+                image_anomaly_score=rule_score,
+                logical_anomaly=True,
+                anomaly_source="rule",
                 categories=categories,
                 mask_counts={key: len(value) for key, value in mask_pool.items()},
                 results=results,
                 filled_template=serialize_template(filled_rules, include_values=True),
-                execution_mode=(
-                    "rule_binary_early_exit" if rule_failed else "rule_binary_only"
-                ),
+                execution_mode="rule_binary_early_exit",
                 timings_seconds=timings,
             )
 
@@ -599,33 +574,16 @@ class LogicAnomalyPipeline:
                 )
 
         if parallel_execution:
-            binary_rule_score = (
-                rule_fusion_score if rule_fusion_score is not None else rule_score
+            image_score = (
+                max(rule_score, memory_score) if memory_score is not None else rule_score
             )
-            available_scores = tuple(
-                float(value)
-                for value in (binary_rule_score, memory_score)
-                if value is not None
-            )
-            image_score = max(available_scores) if available_scores else None
-            image_anomaly = (
-                image_score > FUSION_DECISION_BOUNDARY
-                if image_score is not None
-                else None
-            )
-            rule_anomaly = bool(
-                rule_failed
-                or (
-                    binary_rule_score is not None
-                    and binary_rule_score > FUSION_DECISION_BOUNDARY
-                )
-            )
+            image_anomaly = image_score > FUSION_DECISION_BOUNDARY
             memory_anomaly = bool(
                 memory_score is not None and memory_score > FUSION_DECISION_BOUNDARY
             )
-            if rule_anomaly and memory_anomaly:
+            if rule_failed and memory_anomaly:
                 anomaly_source = "mixed"
-            elif rule_anomaly:
+            elif rule_failed:
                 anomaly_source = "rule"
             elif composition_anomaly and structural_anomaly:
                 anomaly_source = "mixed"
@@ -637,13 +595,10 @@ class LogicAnomalyPipeline:
                 anomaly_source = "mixed"
             else:
                 anomaly_source = None
-            parallel_logical_anomaly = (
-                True if rule_failed or composition_anomaly else logical_anomaly
-            )
             return InferenceReport(
                 image_anomaly=image_anomaly,
                 image_anomaly_score=image_score,
-                logical_anomaly=parallel_logical_anomaly,
+                logical_anomaly=rule_failed or composition_anomaly,
                 anomaly_source=anomaly_source,
                 categories=categories,
                 mask_counts={key: len(value) for key, value in mask_pool.items()},
@@ -651,39 +606,16 @@ class LogicAnomalyPipeline:
                 filled_template=serialize_template(filled_rules, include_values=True),
                 patch_evidence=patch_evidence,
                 composition_evidence=composition_evidence,
-                execution_mode=execution_mode,
+                execution_mode="rule_binary_memory_parallel",
                 timings_seconds=timings,
             )
 
-        if logical_anomaly is None:
-            return InferenceReport(
-                image_anomaly=None,
-                image_anomaly_score=rule_score,
-                logical_anomaly=None,
-                anomaly_source=None,
-                categories=categories,
-                mask_counts={key: len(value) for key, value in mask_pool.items()},
-                results=results,
-                filled_template=serialize_template(filled_rules, include_values=True),
-                patch_evidence=patch_evidence,
-                composition_evidence=composition_evidence,
-                execution_mode=execution_mode,
-                timings_seconds=timings,
-            )
-
-        if rule_failed:
-            image_score = (
-                rule_fusion_score if rule_fusion_score is not None else rule_score
-            )
-            image_anomaly = True
-            logical_anomaly = True
-            anomaly_source = "rule"
-        elif patch_evidence is None and composition_evidence is None:
-            image_score = rule_fusion_score
-            image_anomaly = logical_anomaly
-            anomaly_source = None
+        if memory_score is None:
+            image_score = rule_score
+            image_anomaly = rule_failed
+            logical_anomaly = rule_failed
+            anomaly_source = "rule" if rule_failed else None
         else:
-            assert memory_score is not None
             image_score = memory_score
             image_anomaly = image_score > FUSION_DECISION_BOUNDARY
             logical_anomaly = composition_anomaly
@@ -698,16 +630,15 @@ class LogicAnomalyPipeline:
             else:
                 anomaly_source = None
 
-        if not parallel_execution:
-            execution_mode = (
-                "rule_binary_dual_post"
-                if composition_evidence is not None
-                else (
-                    "rule_binary_patch"
-                    if patch_evidence is not None
-                    else "rule_binary_only"
-                )
+        execution_mode = (
+            "rule_binary_dual_post"
+            if composition_evidence is not None
+            else (
+                "rule_binary_patch"
+                if patch_evidence is not None
+                else "rule_binary_only"
             )
+        )
         return InferenceReport(
             image_anomaly=image_anomaly,
             image_anomaly_score=image_score,
@@ -753,6 +684,7 @@ class LogicAnomalyPipeline:
         expected: Any,
         satisfied: bool,
         details: Mapping[str, Any] | None = None,
+        error: str | None = None,
     ) -> RuleResult:
         """Build a hard-decision result without continuous evidence scoring."""
 
@@ -767,7 +699,9 @@ class LogicAnomalyPipeline:
             expected=expected,
             satisfaction_score=1.0 if satisfied else 0.0,
             violation_score=0.0 if satisfied else 1.0,
+            evidence_valid=error is None,
             details=payload,
+            error=error,
         )
 
     def _execute_binary_rule(

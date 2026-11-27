@@ -20,11 +20,11 @@
 
 !/scripts/
 !/scripts/fill_measurement_templates.py
-!/scripts/castjm/
-!/scripts/castjm/build_memory.py
-!/scripts/castjm/evaluate_rule_castjm_mvtec_loco.py
-!/scripts/castjm/evaluate_mvtec_loco.py
-!/scripts/castjm/evaluate_pixel_texture.py
+!/scripts/pstm/
+!/scripts/pstm/build_memory.py
+!/scripts/pstm/evaluate_rule_pstm_mvtec_loco.py
+!/scripts/pstm/evaluate_mvtec_loco.py
+!/scripts/pstm/evaluate_pixel_texture.py
 
 !/templates/
 !/templates/store/
@@ -42,6 +42,8 @@
 !/config/attributes/splicing_connectors.json
 !/config/template_generation/
 !/config/template_generation/uts.v1.json
+!/config/template_generation/descriptions/
+!/config/template_generation/descriptions/*.txt
 !/config/sam3_thresholds/
 !/config/sam3_thresholds/confidence_gap_midpoint_4-shot/
 !/config/sam3_thresholds/confidence_gap_midpoint_4-shot/*.json

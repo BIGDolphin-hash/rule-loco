@@ -334,6 +334,14 @@ def validate_attribute_vocabulary(
         )
 
 
+def _has_unscored_rules(record: Mapping[str, Any]) -> bool:
+    """Find older records that need re-evaluation under binary decisions."""
+    return any(
+        rule.get("violation_score", 0.0) is None
+        for rule in record.get("rules") or ()
+    )
+
+
 def _load_completed(path: Path) -> dict[str, dict[str, Any]]:
     completed: dict[str, dict[str, Any]] = {}
     if not path.is_file():
@@ -342,7 +350,9 @@ def _load_completed(path: Path) -> dict[str, dict[str, Any]]:
         if not line.strip():
             continue
         record = json.loads(line)
-        if record.get("error") is None:
+        if _has_unscored_rules(record):
+            completed.pop(record["image"], None)
+        elif record.get("error") is None:
             completed[record["image"]] = record
     return completed
 
@@ -676,6 +686,7 @@ def evaluate_dataset(
                     "split": split,
                     "label": label,
                     "score": report.image_anomaly_score,
+                    "status": report.status,
                     "rule_inference_enabled": report.rule_inference_enabled,
                     "rule_memory_schedule": rule_memory_schedule,
                     "execution_mode": report_payload["execution_mode"],
@@ -689,6 +700,9 @@ def evaluate_dataset(
                             "actual": item.actual,
                             "expected": item.expected,
                             "violation_score": item.violation_score,
+                            "status": item.status,
+                            "evidence_valid": item.evidence_valid,
+                            "error": item.error,
                         }
                         for item in report.results
                     ],

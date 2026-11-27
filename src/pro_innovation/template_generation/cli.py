@@ -14,16 +14,20 @@ from .generator import generate_templates
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--images", nargs="+", required=True, help="normal reference image paths")
     parser.add_argument("--uts", type=Path, required=True, help="UTS JSON file")
+    description = parser.add_mutually_exclusive_group()
+    description.add_argument("--description", help="authoritative product description")
+    description.add_argument("--description-file", type=Path, help="UTF-8 product description file")
 
 
 def run(args: argparse.Namespace) -> int:
-    result = generate_templates(args.images, args.uts)
+    description = args.description_file if args.description_file is not None else args.description
+    result = generate_templates(args.images, args.uts, description=description)
     print(json.dumps(result.as_dict(), ensure_ascii=False))
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Images + UTS -> CQT + NRT using the configured VLM")
+    parser = argparse.ArgumentParser(description="Description + images + UTS -> CQT + NRT")
     add_arguments(parser)
     args = parser.parse_args(argv)
     try:

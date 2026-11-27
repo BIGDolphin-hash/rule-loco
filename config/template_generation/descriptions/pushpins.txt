@@ -1,0 +1,1 @@
+A normal pushpin box has fifteen square compartments, each holding one pushpin, for a total of fifteen pushpins. The position and orientation of each pushpin can vary within its compartment.

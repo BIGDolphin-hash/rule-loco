@@ -86,7 +86,7 @@ def load_uts(value: UTSInput) -> dict[str, Any]:
 
 
 def validate_generated_rules(
-    rules: Sequence[Rule], uts: Mapping[str, Any], dimensions: Sequence[tuple[int, int]]
+    rules: Sequence[Rule], uts: Mapping[str, Any]
 ) -> None:
     """Check executable semantics beyond what the existing text parser checks."""
     specs = {item["task"]: item for item in uts["tasks"]}

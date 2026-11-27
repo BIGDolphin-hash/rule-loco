@@ -1,4 +1,4 @@
-"""CAST-JM: Category-Aligned Semantic–Texture Joint Memory.
+"""PSTM: Paired Semantic–Texture Memory.
 
 Public API for the independent semantic and texture joint-memory module.
 """
@@ -7,15 +7,15 @@ from .core import (
     BACKGROUND_BLOCK,
     DEFAULT_TEXTURE_WEIGHT,
     DEFAULT_TOP_FRACTION,
-    CASTJM_MEMORY_SCHEMA,
-    CASTJM_MODE,
+    PSTM_MEMORY_SCHEMA,
+    PSTM_MODE,
     STANDARDIZATION_EPSILON,
-    CASTJMEvidence,
-    CASTJMMemoryBank,
-    CASTJMScorer,
+    PSTMEvidence,
+    PSTMMemoryBank,
+    PSTMScorer,
     global_patch_texture_signature,
 )
-from .global_patch import CASTJMGlobalPatchBank, CASTJMGlobalPatchScorer
+from .global_patch import PSTMGlobalPatchBank, PSTMGlobalPatchScorer
 from .pixel_texture import (
     GlobalPatchPixelLocalization,
     GlobalPatchPixelLocalizer,
@@ -27,14 +27,14 @@ __all__ = (
     "BACKGROUND_BLOCK",
     "DEFAULT_TEXTURE_WEIGHT",
     "DEFAULT_TOP_FRACTION",
-    "CASTJM_MEMORY_SCHEMA",
-    "CASTJM_MODE",
-    "CASTJMGlobalPatchBank",
-    "CASTJMGlobalPatchScorer",
+    "PSTM_MEMORY_SCHEMA",
+    "PSTM_MODE",
+    "PSTMGlobalPatchBank",
+    "PSTMGlobalPatchScorer",
     "STANDARDIZATION_EPSILON",
-    "CASTJMEvidence",
-    "CASTJMMemoryBank",
-    "CASTJMScorer",
+    "PSTMEvidence",
+    "PSTMMemoryBank",
+    "PSTMScorer",
     "GlobalPatchPixelLocalization",
     "GlobalPatchPixelLocalizer",
     "GlobalPatchPixelScorer",

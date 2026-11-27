@@ -1,0 +1,1 @@
+A normal sample consists of one bottle of juice. A square label sits at the middle of the bottle body, and a rectangular label sits near the bottom. A single fruit icon is printed at the center of the square label. A cherry icon goes with red juice, a banana icon goes with yellow juice, and an orange icon also goes with yellow juice.

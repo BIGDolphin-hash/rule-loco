@@ -5,4 +5,4 @@ pipeline contracts under :mod:`pro_innovation`.  Child packages must never
 import one another.
 """
 
-__all__ = ("global_patch", "castjm")
+__all__ = ("global_patch", "pstm")

@@ -18,9 +18,9 @@ from pro_innovation.adapters.patch_dinov2 import (
     DEFAULT_PATCH_DINOV2_CHECKPOINT,
     DinoV2PatchFeatureExtractor,
 )
-from pro_innovation.memory_modules.castjm import (
-    CASTJMGlobalPatchBank,
-    CASTJMGlobalPatchScorer,
+from pro_innovation.memory_modules.pstm import (
+    PSTMGlobalPatchBank,
+    PSTMGlobalPatchScorer,
     GlobalPatchPixelLocalizer,
     GlobalPatchPixelScorer,
 )
@@ -49,7 +49,7 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate the pure-texture GPPL head with existing Global Patch banks; "
-            "SAM3, templates, threshold policies, and CAST-JM joint memories are not used."
+            "SAM3, templates, threshold policies, and PSTM joint memories are not used."
         )
     )
     parser.add_argument("--dataset", choices=SUPPORTED_PIXEL_DATASETS, required=True)
@@ -236,12 +236,12 @@ def _evaluate_class(
         class_output, configuration, restart=args.restart
     )
 
-    bank = CASTJMGlobalPatchBank.load(
+    bank = PSTMGlobalPatchBank.load(
         bank_path,
         expected_class_name=class_name,
         expected_checkpoint_path=args.dino_checkpoint,
     )
-    global_patch_scorer = CASTJMGlobalPatchScorer(
+    global_patch_scorer = PSTMGlobalPatchScorer(
         bank=bank,
         extractor=extractor,
         query_batch_size=args.query_batch_size,
@@ -314,7 +314,7 @@ def _evaluate_class(
         "uses_sam3": False,
         "uses_templates": False,
         "uses_threshold_policy": False,
-        "uses_castjm_joint_memory": False,
+        "uses_pstm_joint_memory": False,
     }
     (class_output / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",

@@ -1,4 +1,4 @@
-"""Generate a category query and normality reference from images and a UTS."""
+"""Generate a category query and normality reference from a description, images and UTS."""
 
 from .generator import GeneratedTemplates, TemplateGenerator, generate_templates
 from .errors import TemplateGenerationError

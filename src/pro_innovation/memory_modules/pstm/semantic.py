@@ -1,6 +1,6 @@
-"""CAST-JM-owned ordered semantic descriptor construction.
+"""PSTM-owned ordered semantic descriptor construction.
 
-CAST-JM owns this implementation so its semantic descriptor remains independent
+PSTM owns this implementation so its semantic descriptor remains independent
 of other memory modules.
 """
 
@@ -36,22 +36,22 @@ def category_only_embedding(
     mask_pool: Mapping[str, Sequence[MaskInstance]],
     categories: Sequence[str],
 ) -> tuple[torch.Tensor, dict[str, slice]]:
-    """Build CAST-JM's fixed-order semantic vector ``[f1; ...; fC]``."""
+    """Build PSTM's fixed-order semantic vector ``[f1; ...; fC]``."""
 
     ordered = tuple(str(category) for category in categories)
     if not ordered or len(set(ordered)) != len(ordered):
-        raise MemoryBankError("CAST-JM categories must be unique and non-empty")
+        raise MemoryBankError("PSTM categories must be unique and non-empty")
     if tuple(sorted(features.layer_features)) != PATCH_MATCHING_LAYERS:
-        raise MemoryBankError("CAST-JM features are missing required DINO layers")
+        raise MemoryBankError("PSTM features are missing required DINO layers")
     positions = features.feature_grid[0] * features.feature_grid[1]
     dimensions = {int(value.shape[-1]) for value in features.layer_features.values()}
     if len(dimensions) != 1:
-        raise MemoryBankError("CAST-JM DINO layers use different dimensions")
+        raise MemoryBankError("PSTM DINO layers use different dimensions")
     dimension = next(iter(dimensions))
     for layer in PATCH_MATCHING_LAYERS:
         values = features.layer_features[layer]
         if values.ndim != 2 or tuple(values.shape) != (positions, dimension):
-            raise MemoryBankError(f"invalid CAST-JM Block {layer} feature shape")
+            raise MemoryBankError(f"invalid PSTM Block {layer} feature shape")
 
     chunks: list[torch.Tensor] = []
     slices: dict[str, slice] = {}
@@ -63,7 +63,7 @@ def category_only_embedding(
             selected = _resize_category_mask(instance, features.feature_grid)
             if not selected.any():
                 raise MemoryBankError(
-                    f"CAST-JM instance for {category!r} disappears on the DINO grid"
+                    f"PSTM instance for {category!r} disappears on the DINO grid"
                 )
             layer_vectors = []
             for layer in PATCH_MATCHING_LAYERS:

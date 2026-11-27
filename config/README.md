@@ -2,12 +2,12 @@
 
 按用途保存配置；选样清单、模型配置和任务定义分别维护。
 
-源码发布包含属性词表、UTS、阈值策略和推理依赖。`vlm/`、`data_selection/` 及完整环境快照仅在本机维护，因此克隆仓库后可能不存在这些目录或文件。
+源码发布包含属性词表、UTS、产品描述、阈值策略和推理依赖。`vlm/`、`data_selection/` 及完整环境快照仅在本机维护，因此克隆仓库后可能不存在这些目录或文件。
 
 | 目录 | 内容 |
 | --- | --- |
 | [attributes/](attributes/) | CLIP/规则推理使用的属性候选词表，按类别命名 |
-| [template_generation/](template_generation/) | 模板生成使用的 UTS 通用任务定义 |
+| [template_generation/](template_generation/) | 模板生成使用的 UTS 通用任务定义和各类别英文产品描述 |
 | `vlm/` | 本机 VLM 服务、模型、地址和凭据配置 |
 | `data_selection/` | Patch 建库和 few-shot 实验的正常图像选样清单 |
 | [sam3_thresholds/](sam3_thresholds/) | SAM3 对象分割阈值策略，按标定方法组织 |
@@ -17,6 +17,7 @@
 
 - 属性词表示例：[attributes/example.json](attributes/example.json)。类别词表为 `attributes/<class_name>.json`，现有 `juice_bottle` 和 `splicing_connectors` 两份。
 - UTS 任务定义：[template_generation/uts.v1.json](template_generation/uts.v1.json)。
+- 英文产品描述：[template_generation/descriptions/](template_generation/descriptions/)。文件以 `<class_name>.txt` 命名，通过 `--description-file` 与正常参考图一同传给模板生成模型。
 - 本机 VLM 配置：`vlm/vlm.local.json`；运行时默认自动读取，可用 `VLM_CONFIG_FILE` 显式指定其他文件。该目录不进入源码发布，本机配置保持 `0600` 权限。
 - 完整 Patch 选样：`data_selection/patch/mvtec_ad.json`、`data_selection/patch/visa.json`（本机）。
 - Few-shot 清单：`data_selection/few_shot/mvtec_ad/`、`data_selection/few_shot/visa/`（本机）。同一数据集的随机选样和分层选样清单分别保留，文件名标明 seed、shot 或选样方法。

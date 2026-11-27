@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate CAST-JM, optionally preceded by the five binary rules."""
+"""Evaluate PSTM alone, in the RGER cascade, or alongside VERV in parallel."""
 
 from __future__ import annotations
 
@@ -20,15 +20,16 @@ from pro_innovation.evaluation import (
     MVTEC_LOCO,
     SUPPORTED_DATASETS,
     _collect_evaluation_samples,
+    _has_unscored_rules,
     _split_specs_for_dataset,
     binary_auroc,
 )
 from pro_innovation.gpu_power import NvidiaGpuPowerMonitor
-from pro_innovation.memory_modules.castjm import (
-    CASTJMGlobalPatchBank,
-    CASTJMGlobalPatchScorer,
-    CASTJMMemoryBank,
-    CASTJMScorer,
+from pro_innovation.memory_modules.pstm import (
+    PSTMGlobalPatchBank,
+    PSTMGlobalPatchScorer,
+    PSTMMemoryBank,
+    PSTMScorer,
 )
 from pro_innovation.mask_processing import MaskPostprocessor
 from pro_innovation.pipeline import (
@@ -42,7 +43,9 @@ from pro_innovation.templates import collect_categories, parse_template
 
 
 def _arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run CAST-JM/FiveRules evaluation")
+    parser = argparse.ArgumentParser(
+        description="Evaluate VERV, RGER, and PSTM in RuleAD"
+    )
     parser.add_argument("--class-name", required=True)
     parser.add_argument(
         "--dataset-root",
@@ -61,15 +64,16 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--joint-bank",
         help=(
-            "required for threshold-backed CAST-JM; ignored by no-threshold "
-            "CAST-JM, which returns the Global Patch score directly"
+            "required for threshold-backed PSTM; ignored by no-threshold "
+            "PSTM, which returns the Global Patch score directly"
         ),
     )
     parser.add_argument(
         "--memory-module",
-        choices=("castjm",),
-        default="castjm",
-        help="compatibility option; CAST-JM is the only supported memory module",
+        type=lambda value: "pstm" if value == "castjm" else value,
+        choices=("pstm",),
+        default="pstm",
+        help="compatibility option; PSTM is the only supported memory module",
     )
     parser.add_argument("--result-root", required=True)
     parser.add_argument("--device", default="cuda")
@@ -113,7 +117,7 @@ def _arguments() -> argparse.Namespace:
         default=RULE_MEMORY_SCHEDULE_BINARY_SELECTIVE,
         help=(
             "binary-selective returns 1 on the first failed rule and runs "
-            "CAST-JM only when all rules pass; binary-parallel runs both "
+            "PSTM only when all rules pass; binary-parallel runs both "
             "branches and takes the maximum of their scores"
         ),
     )
@@ -128,7 +132,11 @@ def _load_completed(path: Path) -> dict[str, dict]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             record = json.loads(line)
-            completed[str(record["image"])] = record
+            image = str(record["image"])
+            if _has_unscored_rules(record):
+                completed.pop(image, None)
+            else:
+                completed[image] = record
     return completed
 
 
@@ -156,7 +164,7 @@ def _memory_executed(record: dict) -> bool:
     timings = record.get("timings_seconds", {})
     return bool(
         float(timings.get("memory_total", 0.0) or 0.0) > 0.0
-        or record.get("castjm_evidence") is not None
+        or record.get("pstm_evidence", record.get("castjm_evidence")) is not None
         or record.get("global_patch_evidence") is not None
     )
 
@@ -184,12 +192,12 @@ def _memory_execution_summary(records: list[dict]) -> dict[str, float | int]:
         "executed_after_rule_failure": len(executed_after_failure),
         "skipped_after_rule_failure": len(failed) - len(executed_after_failure),
         "dinov2_seconds": timing_total(valid, "memory_feature_extraction"),
-        "castjm_matching_seconds": timing_total(valid, "memory_composition"),
+        "pstm_matching_seconds": timing_total(valid, "memory_composition"),
         "total_branch_seconds": timing_total(valid, "memory_total"),
         "dinov2_seconds_after_rule_failure": timing_total(
             executed_after_failure, "memory_feature_extraction"
         ),
-        "castjm_matching_seconds_after_rule_failure": timing_total(
+        "pstm_matching_seconds_after_rule_failure": timing_total(
             executed_after_failure, "memory_composition"
         ),
         "total_branch_seconds_after_rule_failure": timing_total(
@@ -236,7 +244,7 @@ def _initialize_models(
 
 def main() -> int:
     args = _arguments()
-    module_label = "CAST-JM"
+    module_label = "PSTM"
     dataset = Path(args.dataset_root).expanduser().resolve()
     generic_path = Path(args.generic).expanduser().resolve() if args.generic else None
     standard_path = (
@@ -291,7 +299,7 @@ def main() -> int:
         categories: tuple[str, ...] = ()
         missing: tuple[str, ...] = ()
         print(
-            "[CAST-JM] no threshold policy; returning the Global Patch anomaly "
+            "[PSTM] no threshold policy; returning the Global Patch anomaly "
             "score directly without segmentation or joint-memory processing",
             flush=True,
         )
@@ -300,7 +308,7 @@ def main() -> int:
         categories = collect_categories(generic) or tuple(policy.selected_thresholds)
         if not categories:
             raise ValueError(
-                "SAM3-backed CAST-JM requires template or threshold-policy categories"
+                "SAM3-backed PSTM requires template or threshold-policy categories"
             )
         missing = tuple(
             category
@@ -309,7 +317,7 @@ def main() -> int:
         )
         if missing:
             print(
-                "[Rule+CAST-JM] warning: threshold policy is missing "
+                "[Rule+PSTM] warning: threshold policy is missing "
                 + ", ".join(missing)
                 + f"; using global fallback {args.sam3_threshold:.2f}",
                 flush=True,
@@ -321,7 +329,7 @@ def main() -> int:
             flush=True,
         )
 
-    global_bank = CASTJMGlobalPatchBank.load(
+    global_bank = PSTMGlobalPatchBank.load(
         args.global_bank,
         expected_class_name=args.class_name,
         expected_checkpoint_path=args.dino_checkpoint,
@@ -329,7 +337,7 @@ def main() -> int:
     extractor = DinoV2PatchFeatureExtractor(
         checkpoint_path=args.dino_checkpoint, device=args.device
     )
-    global_patch_scorer = CASTJMGlobalPatchScorer(
+    global_patch_scorer = PSTMGlobalPatchScorer(
         bank=global_bank,
         extractor=extractor,
         query_batch_size=args.query_batch_size,
@@ -340,17 +348,17 @@ def main() -> int:
         memory_scorer: Any = global_patch_scorer
     elif not args.joint_bank:
         raise ValueError(
-            "--joint-bank is required unless CAST-JM runs without a threshold policy"
+            "--joint-bank is required unless PSTM runs without a threshold policy"
         )
     else:
-        memory_bank = CASTJMMemoryBank.load(
+        memory_bank = PSTMMemoryBank.load(
             args.joint_bank,
             expected_class_name=args.class_name,
             expected_categories=categories,
             expected_checkpoint_path=args.dino_checkpoint,
             expected_global_patch_bank_path=args.global_bank,
         )
-        memory_scorer = CASTJMScorer(
+        memory_scorer = PSTMScorer(
             bank=memory_bank,
             global_patch_scorer=global_patch_scorer,
         )
@@ -488,7 +496,7 @@ def main() -> int:
                     evidence_key = (
                         "global_patch_evidence"
                         if direct_global_patch_mode
-                        else "castjm_evidence"
+                        else "pstm_evidence"
                     )
                     evidence_payload = (
                         payload["patch_evidence"]
@@ -500,6 +508,7 @@ def main() -> int:
                         "split": split,
                         "label": int(label),
                         "score": report.image_anomaly_score,
+                        "status": report.status,
                         "execution_mode": report.execution_mode,
                         evidence_key: evidence_payload,
                         "rules": payload["results"],
@@ -602,9 +611,9 @@ def main() -> int:
             else module_label
             if not rules_enabled
             else (
-                "FiveRules-Binary+CAST-JM-Parallel"
+                "VERV+PSTM-Parallel"
                 if binary_parallel
-                else "FiveRules-Binary+CAST-JM"
+                else "VERV+RGER+PSTM"
             )
         ),
         "class_name": args.class_name,
@@ -616,32 +625,32 @@ def main() -> int:
             (
                 "global_patch_only"
                 if direct_global_patch_mode
-                else "castjm_only"
+                else "pstm_only"
             )
             if not rules_enabled
             else (
-                "binary_parallel_five_rules_and_castjm"
+                "binary_parallel_verv_and_pstm"
                 if binary_parallel
-                else "binary_selective_five_rules_then_castjm"
+                else "binary_selective_verv_rger_pstm"
             )
         ),
         "fusion": (
             (
                 "direct_global_patch_score"
                 if direct_global_patch_mode
-                else "one_castjm_score"
+                else "one_pstm_score"
             )
             if not rules_enabled
             else (
-                "max_binary_rule_and_castjm_scores"
+                "max_binary_rule_and_pstm_scores"
                 if binary_parallel
-                else "binary_rule_fail_early_exit_else_one_castjm_score"
+                else "binary_rule_fail_early_exit_else_one_pstm_score"
             )
         ),
         "model_startup_seconds": model_startup_seconds,
         "model_startup_components_seconds": model_startup_components,
         "gpu_energy": gpu_energy,
-        "castjm_execution": (
+        "pstm_execution": (
             None if direct_global_patch_mode else memory_execution
         ),
         "global_patch_execution": (
@@ -691,7 +700,7 @@ def main() -> int:
         "seconds_per_image": elapsed / len(records) if records else None,
         "rule_seconds": timing_totals["rule_total"] if rules_enabled else 0.0,
         "memory_seconds": timing_totals["memory_total"],
-        "castjm_seconds": (
+        "pstm_seconds": (
             timing_totals["memory_total"]
             if not direct_global_patch_mode
             else None

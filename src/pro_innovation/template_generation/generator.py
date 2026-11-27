@@ -1,28 +1,34 @@
-"""The task boundary is exactly images + UTS -> CQT + NRT."""
+"""Generate CQT and NRT from descriptions, reference images and a UTS."""
 
 from __future__ import annotations
 
 import base64
+from collections import Counter
 from dataclasses import dataclass, replace
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping, Sequence
 
 from PIL import Image
 
 from ..errors import TemplateError
+from ..models import Rule, TaskType
 from ..templates import parse_template, serialize_template, validate_template_alignment
 from ..vlm import (
     VLMError, VisionImage, VisionLanguageClient, VisionMessage, VisionRequest, create_vlm_client,
 )
 from .errors import TemplateGenerationError
-from .prompts import REPAIR_PROMPT, SYSTEM_PROMPT, USER_PROMPT
+from .prompts import (
+    DESCRIPTION_CHECK, DESCRIPTION_PROMPT, REPAIR_PROMPT, SYSTEM_PROMPT, USER_PROMPT,
+)
 from .uts import UTSInput, load_uts, validate_generated_rules
 
 ImageInput = str | Path | Image.Image
 ImagesInput = ImageInput | Sequence[ImageInput]
 _MAX_ATTEMPTS = 3
+_DESCRIPTION_RULE = re.compile(r"^\s*\[[A-Za-z][A-Za-z0-9_-]*\]\s*TASK\s*=")
 
 
 @dataclass(frozen=True)
@@ -45,7 +51,7 @@ def _output_schema() -> dict[str, Any]:
     }
 
 
-def _encode_images(images: ImagesInput) -> tuple[list[str | VisionImage], list[tuple[int, int]]]:
+def _encode_images(images: ImagesInput) -> list[str | VisionImage]:
     if isinstance(images, (str, Path, Image.Image)):
         items = [images]
     else:
@@ -56,7 +62,6 @@ def _encode_images(images: ImagesInput) -> tuple[list[str | VisionImage], list[t
     if not items:
         raise TemplateError("provide at least one normal reference image")
     content: list[str | VisionImage] = []
-    dimensions = []
     for index, item in enumerate(items, 1):
         opened = None
         try:
@@ -86,12 +91,43 @@ def _encode_images(images: ImagesInput) -> tuple[list[str | VisionImage], list[t
         finally:
             if opened is not None:
                 opened.close()
-        dimensions.append((width, height))
         content.extend([
             f"Normal reference {index}; native width={width}, height={height}.",
             VisionImage(data=data, width=width, height=height),
         ])
-    return content, dimensions
+    return content
+
+
+def _read_description(description: str | Path) -> str:
+    if isinstance(description, Path):
+        try:
+            description = description.expanduser().read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError) as exc:
+            raise TemplateError("description file must be readable UTF-8 text") from exc
+    if not isinstance(description, str) or not description.strip():
+        raise TemplateError("description must be nonempty text")
+    return description
+
+
+def _description_rules(description: str, uts: Mapping[str, Any]) -> tuple[Rule, ...]:
+    lines = [line for line in description.splitlines() if _DESCRIPTION_RULE.match(line)]
+    if not lines:
+        return ()
+    try:
+        rules = parse_template("\n".join(lines), allow_unknown_values=True)
+        required = tuple(
+            replace(rule, minimum="unknown", maximum="unknown")
+            if rule.task in {TaskType.LENGTH, TaskType.AREA}
+            else rule
+            for rule in rules
+        )
+        validate_generated_rules(
+            tuple(replace(rule, rule_id=f"C{i:03d}") for i, rule in enumerate(required, 1)),
+            uts,
+        )
+    except (TemplateError, ValueError, OverflowError) as exc:
+        raise TemplateError(f"invalid rule in description: {exc}") from exc
+    return required
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -104,7 +140,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _validate_response(
-    text: str, uts: Mapping[str, Any], dimensions: Sequence[tuple[int, int]]
+    text: str, uts: Mapping[str, Any], required_rules: Sequence[Rule]
 ) -> GeneratedTemplates:
     try:
         data = json.loads(text, object_pairs_hook=_unique_object)
@@ -124,7 +160,17 @@ def _validate_response(
             data["nrt"], allow_missing_values=False, allow_unknown_values=True
         )
         validate_template_alignment(cqt, nrt)
-        validate_generated_rules(nrt, uts, dimensions)
+        validate_generated_rules(nrt, uts)
+        if required_rules:
+            available = Counter(replace(rule, rule_id="") for rule in nrt)
+            for rule in required_rules:
+                signature = replace(rule, rule_id="")
+                if available[signature] == 0:
+                    raise TemplateError(
+                        f"description rule {rule.rule_id} is missing or changed in the NRT; "
+                        "preserve its structure and values except for deferred measurement bounds"
+                    )
+                available[signature] -= 1
     except TemplateError:
         raise
     except (ValueError, OverflowError) as exc:
@@ -138,9 +184,23 @@ class TemplateGenerator:
     def __init__(self, client: VisionLanguageClient | None = None) -> None:
         self._client = client
 
-    def generate(self, images: ImagesInput, uts: UTSInput) -> GeneratedTemplates:
+    def generate(
+        self, images: ImagesInput, uts: UTSInput, description: str | Path | None = None
+    ) -> GeneratedTemplates:
         definition = load_uts(uts)
-        image_content, dimensions = _encode_images(images)
+        required_rules: tuple[Rule, ...] = ()
+        instruction = USER_PROMPT.format(
+            uts=json.dumps(definition, ensure_ascii=False, sort_keys=True)
+        )
+        if description is not None:
+            description_text = _read_description(description)
+            required_rules = _description_rules(description_text, definition)
+            instruction += "\n" + DESCRIPTION_PROMPT.format(
+                description=json.dumps(description_text, ensure_ascii=False)
+            )
+        image_content = _encode_images(images)
+        if description is not None:
+            image_content.append(DESCRIPTION_CHECK)
         try:
             if self._client is None:
                 self._client = create_vlm_client()
@@ -149,9 +209,7 @@ class TemplateGenerator:
         request = VisionRequest(
             system_prompt=SYSTEM_PROMPT,
             messages=(VisionMessage(role="user", content=(
-                USER_PROMPT.format(
-                    uts=json.dumps(definition, ensure_ascii=False, sort_keys=True)
-                ),
+                instruction,
                 *image_content,
             )),),
             json_schema=_output_schema(), schema_name="cqt_nrt_pair",
@@ -162,7 +220,7 @@ class TemplateGenerator:
             except VLMError as exc:
                 raise TemplateGenerationError(str(exc)) from None
             try:
-                return _validate_response(answer, definition, dimensions)
+                return _validate_response(answer, definition, required_rules)
             except TemplateError as exc:
                 error = str(exc)
                 if attempt + 1 == _MAX_ATTEMPTS:
@@ -178,6 +236,8 @@ class TemplateGenerator:
         raise AssertionError("unreachable")
 
 
-def generate_templates(images: ImagesInput, uts: UTSInput) -> GeneratedTemplates:
-    """Generate just CQT/NRT; the selected model is deployment configuration."""
-    return TemplateGenerator().generate(images, uts)
+def generate_templates(
+    images: ImagesInput, uts: UTSInput, description: str | Path | None = None
+) -> GeneratedTemplates:
+    """Generate CQT/NRT with an optional authoritative product description."""
+    return TemplateGenerator().generate(images, uts, description)
